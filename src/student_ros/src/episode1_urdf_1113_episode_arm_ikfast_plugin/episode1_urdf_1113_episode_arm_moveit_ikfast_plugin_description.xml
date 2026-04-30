@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<library path="episode1_urdf_1113_episode_arm_moveit_ikfast_plugin">
+  <class name="episode1_urdf_1113_episode_arm/IKFastKinematicsPlugin" type="episode1_urdf_1113_episode_arm::IKFastKinematicsPlugin" base_class_type="kinematics::KinematicsBase">
+    <description>IKFast61 plugin for closed-form kinematics of episode1_urdf_1113 episode_arm</description>
+  </class>
+</library>
