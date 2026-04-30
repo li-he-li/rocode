@@ -1,0 +1,91 @@
+# Sensor configuration for MoveIt obstacle detection using RealSense D435
+#
+# This configuration enables MoveIt to perceive obstacles in the environment
+# using a RealSense D435 depth camera. The octomap is used to represent
+# occupied space for collision avoidance during motion planning.
+#
+# Two approaches are available:
+# 1. PointCloudOctomapUpdater: Uses point cloud data (/camera/depth/color/points)
+# 2. DepthImageOctomapUpdater: Uses depth images (/camera/aligned_depth_to_color/image_raw)
+#
+# For RealSense D435, point cloud approach is recommended for simplicity.
+
+sensors:
+  - realsense_pointcloud_alternative
+
+octomap_resolution: 0.02
+
+# Depth Image configuration for RealSense D435 (ACTIVE)
+realsense_depth_image:
+    sensor_plugin: occupancy_map_monitor/DepthImageOctomapUpdater
+
+    # Depth image topic from RealSense
+    image_topic: /camera/camera/aligned_depth_to_color/image_raw
+
+    # Camera info topic (required for depth image mode)
+    depth_image_camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+
+    # Queue size for image processing - increased to improve synchronization
+    queue_size: 5
+
+    # Near clipping plane (meters) - minimum detection distance
+    near_clipping_plane_distance: 0.3
+
+    # Far clipping plane (meters) - maximum detection distance
+    far_clipping_plane_distance: 2.0
+
+    # Shadow threshold for filtering
+    shadow_threshold: 0.2
+
+    # Padding to apply to robot links (in meters)
+    padding_offset: 0.02
+
+    # Scaling factor for padding
+    padding_scale: 1.0
+
+    # Maximum update rate (Hz) - reduced for smoother updates
+    max_update_rate: 5.0
+
+    # Filtered cloud topic for debugging
+    filtered_cloud_topic: /camera/filtered_depth_points
+
+# Point Cloud configuration for RealSense D435 (DISABLED - alternative option)
+realsense_pointcloud_alternative:
+    # Plugin to process point cloud data
+    sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+
+    # Topic published by RealSense camera node
+    # The camera publishes point clouds with color information
+    # Note: Topic includes camera namespace: /camera/camera/...
+    point_cloud_topic: /camera/camera/depth/color/points
+
+    # Maximum range for obstacle detection (in meters)
+    # Adjust based on your workspace size
+    # D435 effective range is typically 0.3m to 3m for indoor environments
+    max_range: 1.0
+
+    # Point subsampling: use every Nth point (1 = use all points)
+    # Increase this value if processing is too slow
+    point_subsample: 1
+
+    # Padding to apply to robot links (in meters)
+    # This creates a safe\\ty buffer around the robot
+    padding_offset: 0.02
+
+    # Scaling factor for padding
+    # 1.0 = use exact robot geometry, >1.0 = make robot appear larger
+    padding_scale: 1.0
+
+    # Maximum update rate for octomap (Hz)
+    # Lower values reduce CPU load but make obstacle detection less responsive
+    max_update_rate: 30.0
+
+    # Topic to publish filtered point cloud (for debugging/visualization)
+    filtered_cloud_topic: /camera/filtered_points
+
+# Octomap parameters (configured in move_group)
+# These are typically set in the planning_context.launch or move_group parameters:
+#
+# octomap_frame: The coordinate frame for the octomap (typically "base_link" or "world")
+# octomap_resolution: Resolution of the octomap in meters (e.g., 0.01 for 1cm resolution)
+#                     Smaller values = more detail but more memory/CPU usage

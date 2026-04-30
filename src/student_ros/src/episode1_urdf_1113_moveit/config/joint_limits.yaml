@@ -1,0 +1,47 @@
+# joint_limits.yaml 允许覆盖或增强 URDF 中指定的动力学属性
+
+# 对于初学者，我们降低速度和加速度限制。
+# 您可以在运动请求中指定更高的缩放因子（<= 1.0）。将下面的值增加到 1.0 以始终以最大速度移动。
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 1.0
+
+# 可以使用以下键更改特定关节属性 [max_position, min_position, max_velocity, max_acceleration]
+# 可以通过 [has_velocity_limits, has_acceleration_limits] 关闭关节限制
+
+# 每个电机的 RPM 限制，恩培机械臂经验值：[90, 60, 100, 100, 100, 10]
+# 实际关节的RPM限制（除以减速比）
+# joint_max_speeds = [100/25, 60/20, 200/25, 200/10, 200/4, 100/1] = [4, 3, 8, 20, 50, 100]
+# max_velocity单位：rad/s = RPM * 2pi/ 60
+# max_acceleration 设置为 max_velocity 的 2-3 倍作为合理值
+
+joint_limits:
+  joint1:
+    has_velocity_limits: true
+    max_velocity: 0.4188790205
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  joint2:
+    has_velocity_limits: true
+    max_velocity: 0.3141592654
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint3:
+    has_velocity_limits: true
+    max_velocity: 0.837758
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  joint4:
+    has_velocity_limits: true
+    max_velocity: 2.094395
+    has_acceleration_limits: true
+    max_acceleration: 5.0
+  joint5:
+    has_velocity_limits: true
+    max_velocity: 5.235988
+    has_acceleration_limits: true
+    max_acceleration: 10.0
+  joint6:
+    has_velocity_limits: true
+    max_velocity: 10.471976
+    has_acceleration_limits: true
+    max_acceleration: 20.0

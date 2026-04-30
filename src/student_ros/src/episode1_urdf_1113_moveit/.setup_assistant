@@ -1,0 +1,23 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: episode1_urdf_1113
+    relative_path: urdf/episode1_urdf_1113.urdf
+  srdf:
+    relative_path: config/episode1_urdf_1113.srdf
+  package_settings:
+    author_name: enpei
+    author_email: enpeicv@outlook.com
+    generated_timestamp: 1763039286
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
