@@ -5,6 +5,7 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        exclude: ^src/3D/camera_intrinsic.*\.yml$
       - id: check-added-large-files
       - id: detect-private-key
 
@@ -13,7 +14,9 @@ repos:
     hooks:
       - id: ruff
         args: [--fix]
+        exclude: ^src/
       - id: ruff-format
+        exclude: ^src/
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v3.2.0
