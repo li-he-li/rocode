@@ -1,0 +1,38 @@
+[project]
+name = "robocode"
+version = "0.1.0"
+description = "Natural language robot control agent for Episode 6-axis arm"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.50.0",
+    "rich>=13.7.0",
+    "prompt_toolkit>=3.0.47",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.4.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24.0",
+    "aiosqlite>=0.20.0",
+    "structlog>=24.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+robocode = "robocode.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["robocode*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

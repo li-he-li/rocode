@@ -1,0 +1,46 @@
+# Bytecode
+__pycache__/
+*.pyc
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Temp & logs
+.temp/
+log/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE & tools
+.pytest_cache/
+.ruff_cache/
+.claude/
+
+# Planning & reference docs
+openspec/
+*.pdf
+cox.md
+final.md
+sn.md
+student_ros.zip
+
+# Third-party / reference code
+src/6D/6D/graspnet-baseline/
+src/student_ros/
+src/6D/__MACOSX/
+
+# Large data & models
+*.bin
+*.safetensors
+*.whl
+*.npy
+*.jpg
+*.png
+
+# Tests
+tests/
