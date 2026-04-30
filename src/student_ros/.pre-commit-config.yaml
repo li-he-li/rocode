@@ -1,0 +1,56 @@
+minimum_pre_commit_version: "3.6.0"
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+default_stages: [pre-commit]
+fail_fast: false
+exclude: |
+  (?x)^(
+    wheelhouse/|
+    .*__pycache__/|
+    .*\.pyc$|
+    .*\.whl$|
+    .*\.stl$|
+    .*\.png$|
+    .*\.jpg$|
+    .*\.jpeg$|
+    .*\.pt$
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: debug-statements
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+        files: \.py$
+      - id: ruff-format
+        files: \.py$
+
+  - repo: local
+    hooks:
+      - id: conventional-commit-msg
+        name: conventional commit message check
+        entry: python scripts/hooks/commit_msg_check.py
+        language: system
+        stages: [commit-msg]
+
+      - id: pre-push-tests
+        name: pre-push tests and type checks
+        entry: python scripts/hooks/pre_push_checks.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

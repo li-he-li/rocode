@@ -31,7 +31,9 @@ student_ros.zip
 
 # Third-party / reference code
 src/6D/6D/graspnet-baseline/
-src/student_ros/
+src/student_ros/.git/
+src/student_ros/wheelhouse/
+src/student_ros/docs/
 src/6D/__MACOSX/
 
 # Large data & models
