@@ -1,17 +1,53 @@
 """Process orchestration — script inventory, detection, grasp tools."""
 
+import json
+import time
+import subprocess
 import yaml
 from pathlib import Path
-from robocode.backends.base import RobotBackend
-from robocode.orchestrator.safety import SafetyPolicy
 from robocode.utils.models import ToolResult
 
-CALIB_DIR = Path("src/student_ros/src/episode_apps/calibration_scripts")
-ROOT_DIR = Path("src")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+CALIB_DIR = _PROJECT_ROOT / "src/student_ros/src/episode_apps/calibration_scripts"
+ROOT_DIR = _PROJECT_ROOT / "src"
+D6_DIR = ROOT_DIR / "6D/6D/6d"
 
 # ── Script Inventory (9.1-9.2) ──────────────────────────────────────
 
 SCRIPT_INVENTORY = [
+    # 6D calibration scripts
+    {
+        "name": "6d_calibration_teach",
+        "path": str(D6_DIR / "0.teach_mode.py"),
+        "category": "calibration",
+        "requires_human": True,
+        "output_files": [str(D6_DIR / "motors_degrees.npy")],
+        "description": "6D标定 Step 0: 示教采集点（人工自由移动机械臂记录位姿）",
+    },
+    {
+        "name": "6d_calibration_collect",
+        "path": str(D6_DIR / "1.generate_points.py"),
+        "category": "calibration",
+        "requires_human": True,
+        "output_files": [],
+        "description": "6D标定 Step 1: 自动采集棋盘格图像并评估质量",
+    },
+    {
+        "name": "6d_calibration_capture",
+        "path": str(D6_DIR / "2.generate_images_and_T.py"),
+        "category": "calibration",
+        "requires_human": False,
+        "output_files": [],
+        "description": "6D标定 Step 2: 遍历角度拍摄棋盘格，计算 R_list/t_list",
+    },
+    {
+        "name": "6d_calibration_compute",
+        "path": str(D6_DIR / "3.calibrate.py"),
+        "category": "calibration",
+        "requires_human": False,
+        "output_files": [str(ROOT_DIR / "6D/6D/graspnet-baseline/T_camera2end.yaml")],
+        "description": "6D标定 Step 3: OpenCV calibrateHandEye 计算 T_camera2end",
+    },
     # Calibration scripts
     {
         "name": "perspective_calibration",
@@ -20,14 +56,6 @@ SCRIPT_INVENTORY = [
         "requires_human": True,
         "output_files": [str(CALIB_DIR / "camera_calibration.yaml")],
         "description": "透视变换标定：点击棋盘 4 角点建立像素→物理mm映射",
-    },
-    {
-        "name": "hand_eye_calibration",
-        "path": str(CALIB_DIR / "4.calibrate_hand_eye_qt_ros2.py"),
-        "category": "calibration",
-        "requires_human": True,
-        "output_files": [str(CALIB_DIR / "hand_eye_calibration.yaml")],
-        "description": "手眼标定：示教 4 点计算 T 矩阵（相机→机器人基座）",
     },
     {
         "name": "storage_perspective_calibration",
@@ -44,23 +72,6 @@ SCRIPT_INVENTORY = [
         "requires_human": True,
         "output_files": [str(CALIB_DIR / "storage_hand_eye_calibration.yaml")],
         "description": "存放区手眼标定",
-    },
-    # Detection scripts
-    {
-        "name": "dino_detect",
-        "path": str(ROOT_DIR / "3D/5.dino_detect.py"),
-        "category": "detection",
-        "requires_human": False,
-        "output_files": [],
-        "description": "GroundingDINO 开放词汇物体检测（需 --output_json）",
-    },
-    {
-        "name": "dino_grasp",
-        "path": str(ROOT_DIR / "3D/6.dino_grasp.py"),
-        "category": "detection",
-        "requires_human": True,
-        "output_files": [],
-        "description": "GroundingDINO 检测 + SDK 抓取闭环",
     },
     {
         "name": "board_state_detection",
@@ -95,81 +106,17 @@ SCRIPT_INVENTORY = [
         "output_files": [],
         "description": "五子棋 Demo（MoveIt 控制）",
     },
-    # 6D grasp pipeline
-    {
-        "name": "agent_grasp_6d",
-        "path": str(ROOT_DIR / "6D/6D/graspnet-baseline/agent_grasp.py"),
-        "category": "grasp",
-        "requires_human": False,
-        "output_files": [],
-        "description": "6D 抓取 Agent：VLM 解析→GraspNet 候选→IK 迭代",
-    },
-    {
-        "name": "vlm_handler_6d",
-        "path": str(ROOT_DIR / "6D/6D/graspnet-baseline/3.demo_VLM_handler.py"),
-        "category": "grasp",
-        "requires_human": False,
-        "output_files": [],
-        "description": "GraspNet 执行器：监听交换文件执行抓取",
-    },
 ]
 
-# ── Tool Implementations ────────────────────────────────────────────
 
-
-def _detect_objects_impl(*, query, confidence_threshold=0.3, **kwargs) -> dict:
-    """Detect objects using GroundingDINO (stub without model)."""
-    # In production, this would subprocess 5.dino_detect.py --output_json
-    # For now, returns guidance that model needs to be available
-    dino_path = ROOT_DIR / "3D/5.dino_detect.py"
-    if not dino_path.exists():
-        return ToolResult(
-            success=False,
-            message=f"检测脚本不存在: {dino_path}",
-        ).model_dump(mode="json")
-    return ToolResult(
-        success=False,
-        message=f"检测模型需在真机环境中加载。执行: python {dino_path} --output_json --query '{query}'",
-        metrics={"query": query, "threshold": confidence_threshold},
-    ).model_dump(mode="json")
-
-
-def _simple_grasp_impl(*, object_description, approach_height_mm=50, **kwargs) -> dict:
-    """Simple 3D grasp pipeline via GroundingDINO detection + SDK execution."""
-    return ToolResult(
-        success=False,
-        message=f"simple_grasp({object_description}) 需真机 GroundingDINO 模型。"
-        f"流程: detect({object_description}) → transform → approach({approach_height_mm}mm) → pick → grip → lift",
-        metrics={
-            "object": object_description,
-            "approach_height_mm": approach_height_mm,
-            "pipeline": "3d_simple",
-        },
-    ).model_dump(mode="json")
-
-
-def _plan_grasp_impl(*, object_description, **kwargs) -> dict:
-    """6D grasp pipeline via VLM + GraspNet multi-candidate pose generation."""
-    agent_path = ROOT_DIR / "6D/6D/graspnet-baseline/agent_grasp.py"
-    return ToolResult(
-        success=False,
-        message=f"plan_grasp({object_description}) 需真机 GraspNet 模型。"
-        f"流程: VLM parse → GraspNet generate → collision filter → IK iterate → execute\n"
-        f"参考: python {agent_path} '{object_description}'",
-        metrics={
-            "object": object_description,
-            "pipeline": "6d_plan",
-        },
-    ).model_dump(mode="json")
-
-
-def make_script_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
+def make_script_tools() -> dict:
     def check_calibration_status(*, calib_type="hand_eye", **kwargs):
         file_map = {
             "hand_eye": CALIB_DIR / "hand_eye_calibration.yaml",
             "perspective": CALIB_DIR / "camera_calibration.yaml",
             "storage_hand_eye": CALIB_DIR / "storage_hand_eye_calibration.yaml",
             "storage_perspective": CALIB_DIR / "storage_camera_calibration.yaml",
+            "6d": ROOT_DIR / "6D/6D/graspnet-baseline/T_camera2end.yaml",
         }
         path = file_map.get(calib_type)
         if not path or not path.exists():
@@ -185,25 +132,19 @@ def make_script_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
             return ToolResult(success=False, message=f"无法读取标定文件: {path}").model_dump(
                 mode="json"
             )
-        has_t = "T_matrix" in data and data["T_matrix"] is not None
+        has_t = False
+        if calib_type == "6d":
+            has_t = "T_camera2end" in data and data["T_camera2end"] is not None
+        else:
+            has_t = "T_matrix" in data and data["T_matrix"] is not None
         return ToolResult(
             success=has_t,
             message=f"{calib_type} 标定{'已' if has_t else '未'}完成",
             metrics={"calib_type": calib_type, "T_matrix_available": has_t, "path": str(path)},
         ).model_dump(mode="json")
 
-    def detect_objects(*, query, confidence_threshold=0.3, **kwargs):
-        return _detect_objects_impl(query=query, confidence_threshold=confidence_threshold)
-
-    def simple_grasp(*, object_description, approach_height_mm=50, **kwargs):
-        return _simple_grasp_impl(
-            object_description=object_description, approach_height_mm=approach_height_mm
-        )
-
-    def plan_grasp(*, object_description, **kwargs):
-        return _plan_grasp_impl(object_description=object_description)
-
-    def run_script(*, script_name, **kwargs):
+    def run_script(*, script_name, args="", **kwargs):
+        t0 = time.perf_counter()
         entry = next((s for s in SCRIPT_INVENTORY if s["name"] == script_name), None)
         if not entry:
             return ToolResult(
@@ -216,16 +157,104 @@ def make_script_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
                 message=f"脚本 {script_name} 需要操作者在 GUI 上手动操作。启动: python {entry['path']}",
                 metrics={"script": script_name, "requires_human": True, "path": entry["path"]},
             ).model_dump(mode="json")
-        return ToolResult(
-            success=False,
-            message=f"脚本 {script_name} 执行需操作者确认后启动 subprocess: python {entry['path']}",
-            metrics={"script": script_name, "path": entry["path"]},
-        ).model_dump(mode="json")
+        # Auto-execute non-human scripts (always in conda episode)
+        cmd = [
+            "conda",
+            "run",
+            "-n",
+            "episode",
+            "--no-capture-output",
+            "python3",
+            str(Path(entry["path"]).resolve()),
+        ]
+        if args:
+            cmd.append(args)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            duration_ms = (time.perf_counter() - t0) * 1000
+            rv = ToolResult(
+                success=proc.returncode == 0,
+                message=proc.stdout.strip()[-500:]
+                if proc.stdout.strip()
+                else ("完成" if proc.returncode == 0 else f"退出码: {proc.returncode}"),
+                metrics={
+                    "script": script_name,
+                    "returncode": proc.returncode,
+                    "stdout": proc.stdout[-2000:],
+                    "stderr": proc.stderr[-1000:],
+                },
+            )
+            from robocode.utils.runtime_log import log_script
+
+            log_script(script_name, cmd, proc.returncode, proc.stdout, proc.stderr, duration_ms)
+            return rv.model_dump(mode="json")
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, message=f"脚本 {script_name} 超时 (120s)").model_dump(
+                mode="json"
+            )
+        except Exception as e:
+            return ToolResult(success=False, message=f"脚本执行异常: {e}").model_dump(mode="json")
+
+    def grasp_6d(*, instruction, **kwargs):
+        """Execute 6D grasp via run_grasp.py — VLM detect + GraspNet + IK + execute."""
+        t0 = time.perf_counter()
+        script = ROOT_DIR / "6D/6D/graspnet-baseline/run_grasp.py"
+        if not script.exists():
+            return ToolResult(success=False, message=f"抓取脚本不存在: {script}").model_dump(
+                mode="json"
+            )
+        try:
+            cmd = [
+                "conda",
+                "run",
+                "-n",
+                "episode",
+                "--no-capture-output",
+                "python3",
+                str(script.resolve()),
+                instruction,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            duration_ms = (time.perf_counter() - t0) * 1000
+            # Parse JSON result from run_grasp.py
+            try:
+                result = (
+                    json.loads(proc.stdout.strip().split("\n")[-1]) if proc.stdout.strip() else {}
+                )
+            except json.JSONDecodeError:
+                result = {}
+            success = result.get("status") == "ok"
+            rv = ToolResult(
+                success=success,
+                message=result.get(
+                    "message",
+                    proc.stdout.strip()[-500:] or ("完成" if proc.returncode == 0 else "失败"),
+                ),
+                metrics={
+                    "instruction": instruction,
+                    "returncode": proc.returncode,
+                    "class_name": result.get("class_name"),
+                    "ik_attempts": result.get("ik_attempts"),
+                    "total_candidates": result.get("total_candidates"),
+                    "stderr": proc.stderr[-1000:],
+                },
+            )
+            from robocode.utils.runtime_log import log_script
+
+            log_script("6d_grasp", cmd, proc.returncode, proc.stdout, proc.stderr, duration_ms)
+            return rv.model_dump(mode="json")
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, message="6D 抓取超时 (180s)").model_dump(mode="json")
+        except Exception as e:
+            return ToolResult(success=False, message=f"6D 抓取异常: {e}").model_dump(mode="json")
 
     return {
         "check_calibration_status": check_calibration_status,
-        "detect_objects": detect_objects,
-        "simple_grasp": simple_grasp,
-        "plan_grasp": plan_grasp,
         "run_script": run_script,
+        "6d_grasp": grasp_6d,
     }

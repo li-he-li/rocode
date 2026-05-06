@@ -6,6 +6,11 @@ from robocode.utils.models import ToolResult
 
 
 def make_gripper_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
+    _is_fake = getattr(backend, "is_fake", False)
+
+    def _dry(msg: str) -> str:
+        return f"[DRY-RUN] {msg}" if _is_fake else msg
+
     def control_suction(*, action, **kwargs):
         if action not in ("on", "off"):
             return ToolResult(success=False, message=f"无效动作: {action}，应为 on/off").model_dump(
@@ -17,7 +22,7 @@ def make_gripper_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
             backend.gripper_on()
         else:
             backend.gripper_off()
-        return ToolResult(success=True, message=f"吸盘已{action}").model_dump(mode="json")
+        return ToolResult(success=True, message=_dry(f"吸盘已{action}")).model_dump(mode="json")
 
     def servo_gripper_control(*, angle, **kwargs):
         angle = int(angle)
@@ -28,7 +33,9 @@ def make_gripper_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         if not safety.is_gripper_supported("servo"):
             return ToolResult(success=False, message="舵机夹爪不可用").model_dump(mode="json")
         backend.servo_gripper(angle)
-        return ToolResult(success=True, message=f"舵机角度已设为 {angle}").model_dump(mode="json")
+        return ToolResult(success=True, message=_dry(f"舵机角度已设为 {angle}")).model_dump(
+            mode="json"
+        )
 
     return {
         "control_suction": control_suction,

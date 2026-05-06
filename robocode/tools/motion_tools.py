@@ -6,6 +6,11 @@ from robocode.utils.models import ToolResult
 
 
 def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
+    _is_fake = getattr(backend, "is_fake", False)
+
+    def _dry(msg: str) -> str:
+        return f"[DRY-RUN] {msg}" if _is_fake else msg
+
     def get_robot_status(**kwargs):
         s = backend.get_status()
         return ToolResult(
@@ -34,7 +39,7 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         result = backend.move_xyz_rotation([260.0, 0.0, 200.0], [180.0, 0.0, 90.0])
         if result < 0:
             return ToolResult(success=False, message="IK 无解，回零位失败").model_dump(mode="json")
-        return ToolResult(success=True, message=f"已回零位，耗时 {result:.1f}s").model_dump(
+        return ToolResult(success=True, message=_dry(f"已回零位，耗时 {result:.1f}s")).model_dump(
             mode="json"
         )
 
@@ -59,7 +64,7 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         if result < 0:
             return ToolResult(success=False, message="IK 无解").model_dump(mode="json")
         return ToolResult(
-            success=True, message=f"移动到 ({x},{y},{z}), 耗时 {result:.1f}s"
+            success=True, message=_dry(f"移动到 ({x},{y},{z}), 耗时 {result:.1f}s")
         ).model_dump(mode="json")
 
     def move_robot_joints(*, angles, speed_ratio=0.5, **kwargs):
@@ -73,19 +78,17 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         result = backend.angle_mode(angles, float(speed_ratio))
         if result < 0:
             return ToolResult(success=False, message="关节运动失败").model_dump(mode="json")
-        return ToolResult(success=True, message=f"关节运动完成, 耗时 {result:.1f}s").model_dump(
-            mode="json"
-        )
+        return ToolResult(
+            success=True, message=_dry(f"关节运动完成, 耗时 {result:.1f}s")
+        ).model_dump(mode="json")
 
-    def emergency_stop(*, enable, **kwargs):
-        if not isinstance(enable, (bool, int)):
-            return ToolResult(success=False, message="enable 必须为 bool 或 int").model_dump(
-                mode="json"
-            )
-        enable_bool = bool(enable)
-        backend.emergency_stop(enable_bool)
-        action = "已急停" if enable_bool else "已解除急停"
-        return ToolResult(success=True, message=action).model_dump(mode="json")
+    def emergency_stop(**kwargs):
+        backend.emergency_stop(True)
+        return ToolResult(success=True, message=_dry("已急停")).model_dump(mode="json")
+
+    def release_emergency_stop(**kwargs):
+        backend.emergency_stop(False)
+        return ToolResult(success=True, message=_dry("已解除急停")).model_dump(mode="json")
 
     return {
         "get_robot_status": get_robot_status,
@@ -93,4 +96,5 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         "move_robot_xyz": move_robot_xyz,
         "move_robot_joints": move_robot_joints,
         "emergency_stop": emergency_stop,
+        "release_emergency_stop": release_emergency_stop,
     }
