@@ -56,15 +56,21 @@ class SdkBackend(RobotBackend):
         self.active_backend = "sdk"
         self._connected = True
 
+    @property
+    def is_fake(self) -> bool:
+        return isinstance(self._client, FakeEpisodeAPP)
+
     def get_status(self) -> RobotStatus:
         if not self._connected:
             return RobotStatus(connected=False, backend=self.active_backend)
         try:
             angles = self._client.get_motor_angles()
             pose = self._client.get_pose()
+            if angles is None:
+                return RobotStatus(connected=False, backend=self.active_backend)
             return RobotStatus(
                 connected=True,
-                motor_angles=list(angles) if angles else [],
+                motor_angles=list(angles),
                 pose=list(pose) if pose is not None else [],
                 estop_active=getattr(self._client, "_estop", False),
                 backend=f"sdk/{self.variant.value}",
@@ -80,7 +86,7 @@ class SdkBackend(RobotBackend):
             angles = self._client.get_motor_angles()
             latency = (time.perf_counter() - t0) * 1000
             return BackendHealth(
-                healthy=angles is not None,
+                healthy=angles is not None and len(angles) == 6,
                 backend=self.active_backend,
                 latency_ms=round(latency, 2),
             )

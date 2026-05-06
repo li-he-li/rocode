@@ -32,13 +32,14 @@ class ApprovalRequest:
             for key, val in self.details.items():
                 lines.append(f"  {key}: {val}")
         lines.append("")
-        lines.append("  [Y] 批准   [N] 拒绝   [A] 本次会话全部批准")
+        lines.append("  [Y] 批准本次   [N] 拒绝   [A] 本工具此后免审批   [S] 全部免审批")
         return "\n".join(lines)
 
 
 class ApprovalGate:
     def __init__(self):
         self._session_approved: set[str] = set()
+        self._all_approved: bool = False
 
     def request(
         self, tool_name: str, risk_level: str, params: dict, summary: str = ""
@@ -53,10 +54,15 @@ class ApprovalGate:
     def is_auto_approved(self, tool_name: str, risk_level: str) -> bool:
         if risk_level == "L0":
             return True
+        if self._all_approved:
+            return True
         return tool_name in self._session_approved
 
     def mark_session_approved(self, tool_name: str):
         self._session_approved.add(tool_name)
+
+    def approve_all(self):
+        self._all_approved = True
 
     def should_prompt(self, risk_level: str) -> bool:
         return risk_level == "L2"

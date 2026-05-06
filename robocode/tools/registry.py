@@ -29,6 +29,7 @@ class SkillEntry(ToolEntry):
     script_path: str = ""
     requires_human: bool = True
     output_files: list[str] = field(default_factory=list)
+    category: str = ""
 
     def __post_init__(self):
         self.is_skill = True

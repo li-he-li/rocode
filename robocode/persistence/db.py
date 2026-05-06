@@ -52,16 +52,6 @@ class AuditDB:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
 
-            CREATE TABLE IF NOT EXISTS safety_rejections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                tool_name TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                check_type TEXT DEFAULT '',
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-
             CREATE TABLE IF NOT EXISTS checkpoints (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL UNIQUE,
@@ -69,16 +59,6 @@ class AuditDB:
                 state TEXT NOT NULL,
                 task_plan TEXT DEFAULT '{}',
                 step_index INTEGER DEFAULT 0,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS artifacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                kind TEXT DEFAULT '',
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
 
@@ -159,23 +139,6 @@ class AuditDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    # ── safety rejections ──
-
-    def record_safety_rejection(self, session_id, tool_name, reason, check_type=""):
-        self.conn.execute(
-            "INSERT INTO safety_rejections (session_id, timestamp, tool_name, reason, check_type) VALUES (?,?,?,?,?)",
-            (session_id, time.time(), tool_name, reason, check_type),
-        )
-        self._touch_session(session_id)
-        self.conn.commit()
-
-    def list_safety_rejections(self, session_id) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM safety_rejections WHERE session_id=? ORDER BY timestamp ASC",
-            (session_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
     # ── checkpoints ──
 
     def save_checkpoint(self, session_id, state, task_plan, step_index=0):
@@ -194,21 +157,6 @@ class AuditDB:
         if row:
             return dict(row)
         return None
-
-    # ── artifacts ──
-
-    def record_artifact(self, session_id, name, path, kind=""):
-        self.conn.execute(
-            "INSERT INTO artifacts (session_id, timestamp, name, path, kind) VALUES (?,?,?,?,?)",
-            (session_id, time.time(), name, path, kind),
-        )
-        self.conn.commit()
-
-    def list_artifacts(self, session_id) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM artifacts WHERE session_id=? ORDER BY timestamp ASC", (session_id,)
-        ).fetchall()
-        return [dict(r) for r in rows]
 
     # ── internal ──
 

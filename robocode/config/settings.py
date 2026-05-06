@@ -1,11 +1,15 @@
+from pathlib import Path
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Project root (3 levels up: settings.py → config/ → robocode/ → project/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class ProviderConfig(BaseModel):
-    base_url: str = "https://api.deepseek.com/v1"
+    base_url: str = "https://api.deepseek.com"
     api_key: str = ""
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
 
 
 class BackendEndpoints(BaseModel):
@@ -38,7 +42,13 @@ class ApprovalPolicy(BaseModel):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ROBOCODE_", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(
+        env_prefix="ROBOCODE_",
+        env_nested_delimiter="__",
+        env_file=str(PROJECT_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     provider: ProviderConfig = ProviderConfig()
     backend: BackendEndpoints = BackendEndpoints()

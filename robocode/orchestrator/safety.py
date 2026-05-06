@@ -49,21 +49,6 @@ class SafetyPolicy:
     def is_gripper_supported(self, gripper_type: str) -> bool:
         return gripper_type in self.SUPPORTED_GRIPPERS
 
-    def get_profile(self) -> dict:
-        return {
-            "version": self.PROFILE_VERSION,
-            "max_radius_mm": self.settings.safety.max_radius_mm,
-            "max_payload_g": self.settings.safety.max_payload_g,
-            "supply_voltage": self.settings.safety.supply_voltage,
-            "supply_current_a": self.settings.safety.supply_current_a,
-            "workspace_x": [self.settings.workspace.x_min, self.settings.workspace.x_max],
-            "workspace_y": [self.settings.workspace.y_min, self.settings.workspace.y_max],
-            "workspace_z": [self.settings.workspace.z_min, self.settings.workspace.z_max],
-            "max_speed_ratio": self.settings.workspace.max_speed_ratio,
-            "joint_limits": [list(j) for j in self.JOINT_LIMITS],
-            "supported_grippers": sorted(self.SUPPORTED_GRIPPERS),
-        }
-
     def requires_approval(self, risk_level: str) -> bool:
         if risk_level == "L0":
             return False
