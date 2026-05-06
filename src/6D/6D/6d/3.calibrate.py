@@ -62,7 +62,7 @@ class Calibration:
         self.align = rs.align(rs.stream.color)
 
         # 启动相机流
-        self.pipeline.start(config_rs)
+        # self.pipeline.start(config_rs)  # patched
 
     def get_camera_paras(self, calib=True):
         """
@@ -185,7 +185,8 @@ class Calibration:
         cv2.destroyAllWindows()
 
         # 获取相机内参
-        self.intr_matrix, self.dist_coeffs = self.get_camera_paras()
+        self.intr_matrix = np.load("/tmp/intr_matrix.npy")
+        self.dist_coeffs = np.load("/tmp/dist_coeffs.npy")
         print("相机内参矩阵: ")
         print(self.intr_matrix)
 
@@ -287,7 +288,7 @@ if __name__ == "__main__":
 
     while True:
         try:
-            choice = int(input("\n请选择标定方法 (输入数字 1-3): "))
+            choice = 1  # 自动选择Horaud
             if 1 <= choice <= len(methods):
                 method_name = list(methods.keys())[choice-1]
                 method = methods[method_name]

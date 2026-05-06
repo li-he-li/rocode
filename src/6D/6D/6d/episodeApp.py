@@ -140,9 +140,8 @@ class EpisodeAPP:
         result =  self.send_command(command)
         if result < 0:
             print(f"IK无解，位姿：{params}")
-            return
-        else:
-            time.sleep(result)
+            return -1
+        return result
 
     def move_linear_xyz_rotation(self, position, orientation, rotation_order="zyx"):
         """
@@ -163,9 +162,8 @@ class EpisodeAPP:
         result =  self.send_command(command)
         if result < 0:
             print(f"IK无解，位姿：{params}")
-            return
-        else:
-            time.sleep(result)
+            return -1
+        return result
     def gripper_on(self):
         """
         启动负压吸盘抓取操作。
