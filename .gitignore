@@ -30,7 +30,6 @@ sn.md
 student_ros.zip
 
 # Third-party / reference code
-src/6D/6D/graspnet-baseline/
 src/student_ros/.git/
 src/student_ros/wheelhouse/
 src/student_ros/docs/
@@ -41,8 +40,45 @@ src/6D/__MACOSX/
 *.safetensors
 *.whl
 *.npy
+*.pt
+*.pth
 *.jpg
 *.png
+*.STL
+*.DS_Store
 
-# Tests
-tests/
+# Third-party reference code / models
+src/3D/grounding-dino-base/
+src/SDK/cpp_api_07101/
+src/6D/6D/graspnet-baseline/*
+!src/6D/6D/graspnet-baseline/run_grasp.py
+!src/6D/6D/graspnet-baseline/agent_grasp.py
+src/student_ros/src/episode_apps/calibration_scripts/train_yolo/
+
+# Runtime artifacts
+robocode_audit.db
+*.db-journal
+3.gui_server_uni
+
+# Editor backups
+*.bak
+*~
+
+# Ad-hoc test scripts (not part of main test suite)
+src/3D/1.test_d435_aruco.py
+src/3D/4.3d_calibrate_test.py
+src/6D/6D/6d/4.test_gripper.py
+
+# Robot state dumps
+src/episode1_0307.robot
+
+# Calibration images (large binary data)
+src/6D/6D/6d/calibration_images/
+
+# Planning docs (Chinese)
+门禁.md
+
+# Reference data (URDF resources)
+src/student_ros/src/episode1_urdf_1113/resource/
+src/student_ros/src/episode_controller/resource/
+src/student_ros/src/episode_controller/test/
