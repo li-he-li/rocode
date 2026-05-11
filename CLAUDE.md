@@ -14,7 +14,8 @@
 
 ## 目录结构
  - robocode/log/ robocode/.temp/ → 运行时日志和临时文件
- - 项目根 log/ .temp/ → 开发时日志和测试脚本
+ - 项目根 .temp/ → 测试脚本
+ - docs/ → 开发日志（分类归档 + frontmatter + index.md 索引）
 
 
 <!-- 关键目录说明 -->
@@ -94,25 +95,52 @@
 
 ### 5. 开发轨迹可见
 
-每次的完成一个阶段的目标，或debug（无论多小的bug）或测试都要总结并留档到 `log/` 文件夹（不存在则创建）中，做到整个迭代流程可见。
+每次完成一个阶段的目标，或 debug（无论多小的 bug），或测试，都要留档到 `docs/` 目录的对应分类中，做到整个迭代流程可见、AI clean 后可快速恢复上下文。
 
-日志结构：按天单文件，文件名格式 `YYYY-MM-DD.md`，当天所有改动和测试按时间顺序追加写入。
+目录结构：
+
+```
+docs/
+├── index.md                  # 总索引（当前状态 + 模块地图 + 标签索引 + 时间线）
+├── 01-changelog/             # 功能变更日志 — feature/phase 实现记录
+│   └── YYYY-MM-DD.md
+├── 02-debug/                 # 调试记录 — bug 定位、修复过程
+│   └── YYYY-MM-DD.md
+├── 03-tests/                 # 测试报告 — 用例数、通过率、回归结果
+│   └── YYYY-MM-DD.md
+├── 04-reviews/               # Gatekeeper 审查记录 — P0/P1 修复结论
+│   └── YYYY-MM-DD.md
+├── 05-design/                # 设计决策 — 架构讨论、技术选型记录
+│   └── YYYY-MM-DD.md
+└── 06-ai-assets/             # AI 特有资产
+    ├── prompt-sessions/      # 关键 session 对话快照
+    │   └── YYYY-MM-DD_session_summary.md
+    └── model-version.log     # 模型版本、参数、环境变更记录
+```
+
+每个日志文件头部需包含 YAML frontmatter，供 AI 快速扫描：
 
 ```markdown
-# YYYY-MM-DD
+---
+tags: [voice, stt, cli]
+date: 2026-05-07
+summary: 一句话描述本次记录内容
+status: done
+---
+```
 
-## [HH:MM] 改动
-- 用户要求：xxx（什么问题）
-- 改动内容：xxx（如何解决的）
-- 改动时间：xxx
+日志内容按时间顺序追加，格式：
 
-## [HH:MM] 测试
-- 测试内容：xxx
-- 测试结果：xxx
+```markdown
+## [HH:MM] 标题
+- 用户要求：xxx
+- 改动内容：xxx
 - 改动时间：xxx
 ```
 
 改动记录不必深入到代码，总结即可。
+
+每次变更后同步更新 `docs/index.md`（状态摘要 + 标签索引 + 时间线）。
 
 ### 6. 自动审查流程
 
