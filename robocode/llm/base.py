@@ -14,7 +14,7 @@ class ToolUse:
 
 @dataclass
 class StreamEvent:
-    kind: str  # "text_delta" | "tool_use" | "end_turn"
+    kind: str  # "text_delta" | "tool_use" | "end_turn" | "metadata" | "reasoning" | "error"
     payload: dict[str, Any] = field(default_factory=dict)
 
 

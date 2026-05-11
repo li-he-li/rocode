@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from typing import Any
 from robocode.config import Settings
+from robocode.services.analytics.logger import get_logger
+
+logger = get_logger("safety")
 
 
 @dataclass
@@ -103,6 +106,7 @@ class SafetyPolicy:
             return None
 
     def check_operation(self, tool_name: str, params: dict) -> list[SafetyCheck]:
+        logger.info("safety_check", tool_name=tool_name)
         results = []
         x = self._safe_float("x", params)
         y = self._safe_float("y", params)

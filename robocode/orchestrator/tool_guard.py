@@ -3,6 +3,10 @@
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from robocode.services.analytics.logger import get_logger
+
+logger = get_logger("tool_guard")
+
 
 @dataclass
 class GuardResult:
@@ -24,6 +28,7 @@ class ToolGuard:
         approval_settings,
         owner_callback: ApprovalCallback | None = None,
         session_id: str = "",
+        metrics=None,
     ):
         self._gate = approval_gate
         self._db = audit_db
@@ -31,6 +36,7 @@ class ToolGuard:
         self._settings = approval_settings
         self._owner_callback = owner_callback
         self._session_id = session_id
+        self._metrics = metrics
 
     async def check(
         self, tool_name: str, risk_level: str, params: dict, summary: str = ""
@@ -132,15 +138,20 @@ class ToolGuard:
             try:
                 self._db.record_approval(self._session_id, tool_name, risk_level, approved)
             except Exception:
-                pass
+                logger.error("audit_approval_write_failed", exc_info=True)
 
     def _record_and_return(
         self, tool_name: str, risk_level: str, params: dict, decision: str, reason: str
     ) -> GuardResult:
+        if self._metrics is not None:
+            self._metrics.record("safety_rejection")
+        logger.info("tool_rejected", tool_name=tool_name, reason=reason)
         self._record_approval(tool_name, risk_level, decision != "rejected")
         return GuardResult(allowed=False, reason=reason, decision=decision)
 
-    def record_call(self, tool_name: str, risk_level: str, params: dict, result: dict):
+    def record_call(
+        self, tool_name: str, risk_level: str, params: dict, result: dict, duration_ms: float = 0
+    ):
         """Record tool call to audit DB after execution."""
         if self._db and self._session_id:
             try:
@@ -150,6 +161,7 @@ class ToolGuard:
                     risk_level,
                     params if params else {},
                     result if result else {},
+                    duration_ms=duration_ms,
                 )
             except Exception:
-                pass
+                logger.error("audit_tool_call_write_failed", exc_info=True)

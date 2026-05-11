@@ -24,6 +24,15 @@ class RobotBackend(ABC):
     ) -> float: ...
 
     @abstractmethod
+    def move_linear_xyz_rotation(
+        self,
+        position: list[float],
+        orientation: list[float],
+        rotation_order: str = "zyx",
+        speed_ratio: float = 1.0,
+    ) -> float: ...
+
+    @abstractmethod
     def angle_mode(self, angles: list[float], speed_ratio: float = 1.0) -> float: ...
 
     @abstractmethod

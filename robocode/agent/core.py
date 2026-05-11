@@ -2,14 +2,14 @@
 
 import json
 import asyncio
-import structlog
 
 from robocode.llm.base import LLMProvider, StreamEvent
 from robocode.agent.context import ContextMemory
 from robocode.utils.models import ToolResult
-from robocode.orchestrator.state_machine import Orchestrator, OrchestratorState
+from robocode.orchestrator.state_machine import OrchestratorState
+from robocode.services.analytics.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger("agent")
 
 SYSTEM_PROMPT = """你是一个专业的机器人控制助手，控制一台 Episode 6 轴机械臂。
 
@@ -60,9 +60,9 @@ class AgentLoop:
         max_iterations: int = 20,
         guard=None,
         risk_levels: dict[str, str] | None = None,
-        orchestrator: Orchestrator | None = None,
         db=None,
         session_id: str = "",
+        metrics=None,
     ):
         self.provider = provider
         self.tool_handlers = tool_handlers or {}
@@ -71,15 +71,16 @@ class AgentLoop:
         self.context = ContextMemory()
         self.guard = guard
         self.risk_levels = risk_levels or {}
-        self.orchestrator = orchestrator or Orchestrator()
+        self._state = OrchestratorState.IDLE
         self._db = db
         self._session_id = session_id
+        self._metrics = metrics
 
     async def execute_tool(self, event: StreamEvent) -> dict:
         return await self._execute_tool(event)
 
     async def run_turn(self, user_input: str) -> str:
-        self.orchestrator.state = OrchestratorState.PLANNING
+        self._state = OrchestratorState.PLANNING
         self.context.add_user_message(user_input)
         last_text = ""
 
@@ -106,18 +107,28 @@ class AgentLoop:
                             last_text, reasoning_content=reasoning_content
                         )
                     self.context.trim()
-                    self.orchestrator.state = OrchestratorState.SUCCESS
+                    self._state = OrchestratorState.SUCCESS
                     self._save_checkpoint()
                     return last_text or "ok"
+                elif event.kind == "metadata":
+                    logger.info(
+                        "llm_metadata",
+                        model=event.payload.get("model"),
+                        latency_ms=event.payload.get("latency_ms"),
+                        completion_chars=event.payload.get("completion_chars", 0),
+                    )
+                    if self._metrics is not None:
+                        self._metrics.record("llm_call_total")
+                        self._metrics.record_latency("llm_call", event.payload.get("latency_ms", 0))
                 elif event.kind == "error":
                     self.context.trim()
-                    self.orchestrator.state = OrchestratorState.FAILED
+                    self._state = OrchestratorState.FAILED
                     self._save_checkpoint()
                     return f"API 错误: {event.payload.get('message', 'unknown')}"
 
             # After stream ends with tool_calls, record assistant message + execute tools
             if tool_uses:
-                self.orchestrator.state = OrchestratorState.EXECUTING
+                self._state = OrchestratorState.EXECUTING
                 assistant_tool_calls = [
                     {
                         "id": tu.payload.get("id", ""),
@@ -144,7 +155,7 @@ class AgentLoop:
                     )
 
         self.context.trim()
-        self.orchestrator.state = OrchestratorState.FAILED
+        self._state = OrchestratorState.FAILED
         self._save_checkpoint()
         return "已达最大迭代次数，任务未完成。"
 
@@ -153,12 +164,12 @@ class AgentLoop:
             try:
                 self._db.save_checkpoint(
                     self._session_id,
-                    self.orchestrator.state.value,
-                    {},
+                    self._state.value,
+                    {"context_json": self.context.to_json()},
                     step_index=len([m for m in self.context.messages if m.get("role") == "tool"]),
                 )
             except Exception:
-                pass
+                logger.exception("checkpoint_save_failed")
 
     async def _execute_tool(self, event: StreamEvent) -> dict:
         import time as _time
@@ -199,13 +210,15 @@ class AgentLoop:
                 result = await asyncio.to_thread(handler, **tool_input)
             rv = result.model_dump(mode="json") if isinstance(result, ToolResult) else result
             duration_ms = (_time.perf_counter() - t0) * 1000
-            # Runtime log
-            from robocode.utils.runtime_log import log_tool_call
 
-            log_tool_call(tool_name, risk_level, tool_input, rv, duration_ms, self._session_id)
+            if self._metrics is not None:
+                self._metrics.record_latency("tool_execution", duration_ms)
+                self._metrics.record("tool_execution_total")
+
+            logger.info("tool_execution_completed", tool_name=tool_name, duration_ms=duration_ms)
             # Record to audit DB
             if self.guard is not None:
-                self.guard.record_call(tool_name, risk_level, tool_input, rv)
+                self.guard.record_call(tool_name, risk_level, tool_input, rv, duration_ms)
             return rv
         except Exception:
             duration_ms = (_time.perf_counter() - t0) * 1000
@@ -214,11 +227,6 @@ class AgentLoop:
                 success=False,
                 message=f"工具 {tool_name} 执行异常",
             ).model_dump(mode="json")
-            from robocode.utils.runtime_log import log_tool_call
-
-            log_tool_call(
-                tool_name, risk_level, tool_input, error_result, duration_ms, self._session_id
-            )
             if self.guard is not None:
-                self.guard.record_call(tool_name, risk_level, tool_input, error_result)
+                self.guard.record_call(tool_name, risk_level, tool_input, error_result, duration_ms)
             return error_result

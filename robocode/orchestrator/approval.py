@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from robocode.services.analytics.logger import get_logger
+
+logger = get_logger("approval")
 
 
 class ApprovalAction(str, Enum):

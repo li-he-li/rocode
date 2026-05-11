@@ -1,12 +1,13 @@
 """DeepSeek V4 Pro provider via OpenAI-compatible API."""
 
 import json
-import structlog
+import time
 from openai import AsyncOpenAI
 from robocode.config import Settings
 from robocode.llm.base import LLMProvider, StreamEvent
+from robocode.services.analytics.logger import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger("llm")
 
 
 class DeepSeekProvider(LLMProvider):
@@ -18,6 +19,8 @@ class DeepSeekProvider(LLMProvider):
         )
 
     async def stream(self, system: str, messages: list[dict], tools: list[dict]):
+        t0 = time.perf_counter()
+        text_chars = 0
         params = {
             "model": self.settings.provider.model,
             "messages": [{"role": "system", "content": system}] + messages,
@@ -31,12 +34,14 @@ class DeepSeekProvider(LLMProvider):
 
         tool_use_buffer: dict[int, dict] = {}
         reasoning_parts: list[str] = []
+        finish_reason = ""
         async for chunk in api_stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta is None:
                 continue
 
             if delta.content:
+                text_chars += len(delta.content)
                 yield StreamEvent(kind="text_delta", payload={"delta": delta.content})
 
             rc = getattr(delta, "reasoning_content", None)
@@ -61,6 +66,9 @@ class DeepSeekProvider(LLMProvider):
                             buf["arguments"] += tc.function.arguments
 
             reason = chunk.choices[0].finish_reason
+            if reason:
+                finish_reason = reason
+
             if reason == "tool_calls":
                 if reasoning_parts:
                     yield StreamEvent(
@@ -91,3 +99,16 @@ class DeepSeekProvider(LLMProvider):
                     kind="error",
                     payload={"message": f"API finish_reason={reason}"},
                 )
+
+        # Emit metadata event at end of stream
+        latency_ms = (time.perf_counter() - t0) * 1000
+        yield StreamEvent(
+            kind="metadata",
+            payload={
+                "model": self.settings.provider.model,
+                "finish_reason": finish_reason,
+                "latency_ms": round(latency_ms, 1),
+                "completion_chars": text_chars,
+                "completion_tokens_est": max(1, text_chars // 4),
+            },
+        )

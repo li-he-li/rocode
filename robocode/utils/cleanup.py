@@ -8,7 +8,7 @@ _ROBOCODE_DIR = Path(__file__).resolve().parent.parent  # robocode/
 _GENERATED_DIR = _ROBOCODE_DIR / ".temp" / "generated"
 _RUNTIME_DIR = _ROBOCODE_DIR / "log" / "runtime"
 
-MAX_GENERATED_FILES = 50
+MAX_GENERATED_FILES = 5
 MAX_RUNTIME_DAYS = 30
 
 

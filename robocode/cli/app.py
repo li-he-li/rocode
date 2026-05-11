@@ -17,6 +17,7 @@ from prompt_toolkit.key_binding import KeyBindings
 
 from robocode.cli.slash import SlashDispatcher
 from robocode.cli.skill_loader import load_skills
+from robocode.cli.voice import VoiceController, VoiceState
 from robocode.agent.core import AgentLoop
 from robocode.llm.deepseek_provider import DeepSeekProvider
 from robocode.config import Settings
@@ -35,7 +36,10 @@ from robocode.orchestrator.safety import SafetyPolicy
 from robocode.utils.cleanup import run_startup_cleanup
 from robocode.orchestrator.approval import ApprovalGate
 from robocode.orchestrator.tool_guard import ToolGuard
-from robocode.persistence.db import AuditDB
+from robocode.services.analytics.db import AuditDB
+from robocode.services.analytics.logger import setup_logging, get_logger
+from robocode.services.analytics.metrics import MetricsCollector
+from robocode.services.analytics.resource_tracker import ResourceTracker
 
 PROMPT_STYLE = Style.from_dict({"prompt": "#00ff00 bold"})
 
@@ -44,6 +48,15 @@ class RobocodeApp:
     def __init__(self, fake: bool = False):
         self.console = Console()
         self._explicit_fake = fake
+        self._backend_error = ""
+
+        # Metrics collector (before voice, so voice can use it)
+        self.metrics = MetricsCollector()
+
+        # Voice controller — preloads model in background thread
+        self._voice = VoiceController(metrics=self.metrics)
+        self._voice.set_on_result(self._on_voice_result)
+
         kb = KeyBindings()
 
         @kb.add("escape")
@@ -52,13 +65,30 @@ class RobocodeApp:
                 self._agent_task.cancel()
                 self.console.print("\n[yellow]⏹ 已中断[/yellow]")
 
+        @kb.add("f2")
+        def _(event):
+            if self._agent_running:
+                return
+            state = self._voice.state
+            if state in (VoiceState.READY, VoiceState.IDLE):
+                self._voice.start_recording()
+            elif state == VoiceState.RECORDING:
+                self._voice.stop_recording(trigger="f2")
+
         self.session = PromptSession(history=InMemoryHistory(), key_bindings=kb)
         self._running = True
         self._agent_task = None
         self._agent_running = False
 
         self.settings = Settings()
+        setup_logging()
+        self._logger = get_logger("cli")
         run_startup_cleanup()
+
+        # Resource tracker
+        self._resources = ResourceTracker()
+        for msg in self._resources.detect_dirty_state():
+            self.console.print(msg)
         self.db = AuditDB()
         self.db.initialize()
         self._session_id = self.db.create_session(backend=self.settings.active_backend)
@@ -120,6 +150,7 @@ class RobocodeApp:
             approval_settings=self.settings.approval,
             owner_callback=self._owner_approval_callback,
             session_id=self._session_id,
+            metrics=self.metrics,
         )
 
         # Agent
@@ -131,11 +162,13 @@ class RobocodeApp:
             risk_levels=risk_levels,
             db=self.db,
             session_id=self._session_id,
+            metrics=self.metrics,
         )
 
-        # Wire registry + backend into slash dispatcher (created before them)
+        # Wire registry + backend + voice into slash dispatcher (created before them)
         self.slash._registry = self.registry
         self.slash._robot_backend = self.backend
+        self.slash._voice = self._voice
 
     def _register_tools(self):
         entries = [
@@ -163,6 +196,30 @@ class RobocodeApp:
                         "speed_ratio": {"type": "number"},
                     },
                     "required": ["x", "y", "z"],
+                },
+                risk_level="L2",
+            ),
+            ToolEntry(
+                name="move_path",
+                description="沿连续路径运动：一次传入多个 [x,y,z] 路点，内部用直线插值依次执行，消除多步调用间的停顿。用于画圆、弧线等平滑轨迹",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "waypoints": {
+                            "type": "array",
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 3,
+                                "maxItems": 3,
+                            },
+                            "minItems": 1,
+                            "maxItems": 200,
+                        },
+                        "speed_ratio": {"type": "number"},
+                        "rotation": {"type": "array", "items": {"type": "number"}},
+                    },
+                    "required": ["waypoints"],
                 },
                 risk_level="L2",
             ),
@@ -498,7 +555,9 @@ class RobocodeApp:
                 loop.add_reader(fd, self._on_esc_stdin)
 
     async def run(self):
+        self._loop = asyncio.get_running_loop()
         self._show_banner()
+        self._check_unclosed_sessions()
 
         # SIGINT during agent execution → cancel the agent task
         # SIGINT during prompt → KeyboardInterrupt (handled by prompt_async)
@@ -520,6 +579,7 @@ class RobocodeApp:
                 user_input = await self.session.prompt_async(
                     [("class:prompt", "you "), ("", "▸ ")],
                     style=PROMPT_STYLE,
+                    bottom_toolbar=self._bottom_toolbar,
                 )
                 user_input = user_input.strip()
             except (KeyboardInterrupt, EOFError):
@@ -530,6 +590,8 @@ class RobocodeApp:
 
             if user_input.startswith("/"):
                 self._handle_slash(user_input)
+            elif self._agent_running:
+                self.console.print("[dim]⏳ Agent 正在执行中，请等待...[/dim]")
             else:
                 # Install agent-phase SIGINT handler
                 signal.signal(signal.SIGINT, _sigint_handler)
@@ -537,6 +599,10 @@ class RobocodeApp:
 
         # Restore original signal handler
         signal.signal(signal.SIGINT, original_sigint)
+        self._logger.info("session_ended", session_id=self._session_id)
+        self._resources.cleanup()
+        self.db.close_session(self._session_id)
+        self._voice.shutdown()
         self.db.close()
 
     def _handle_slash(self, user_input: str):
@@ -552,6 +618,7 @@ class RobocodeApp:
             asyncio.create_task(self._handle_chat(result.message))
             return
         if result.action == "resume_session":
+            self._restore_session(result.message)
             return
         if result.action == "approve_all":
             self.approval.approve_all()
@@ -559,13 +626,14 @@ class RobocodeApp:
             return
         self.console.print(Panel(result.message, title="slash", border_style="blue"))
 
-    async def _handle_chat(self, user_input: str):
+    async def _handle_chat(self, user_input: str, from_voice: bool = False):
         display = self.console
         provider = self.agent.provider
 
         original_stream = provider.stream
         provider.stream = self._make_display_stream(original_stream)
-        self._start_esc_watcher()
+        if not from_voice:
+            self._start_esc_watcher()
         try:
             self._agent_running = True
             self._agent_task = asyncio.current_task()
@@ -581,7 +649,8 @@ class RobocodeApp:
             self._agent_running = False
             self._agent_task = None
             provider.stream = original_stream
-            self._stop_esc_watcher()
+            if not from_voice:
+                self._stop_esc_watcher()
 
     def _start_esc_watcher(self):
         """Set terminal to raw mode and watch stdin for ESC (0x1b) via asyncio."""
@@ -641,9 +710,90 @@ class RobocodeApp:
 
         return display_stream
 
-    def _trigger_estop(self):
-        self.backend.emergency_stop(True)
-        self.console.print("[bold red]急停已触发！[/bold red]")
+    def _on_voice_result(self, text: str):
+        """Called from background thread when transcription completes."""
+        if hasattr(self, "_loop"):
+            self._loop.call_soon_threadsafe(self._handle_voice_result_safe, text)
+
+    def _handle_voice_result_safe(self, text: str):
+        """Runs on main event loop thread. Displays result and dispatches to agent."""
+        if text:
+            self.console.print(f"[bold green]🎤 →[/bold green] {text}")
+            if not self._agent_running:
+                asyncio.create_task(self._handle_chat(text, from_voice=True))
+        else:
+            self.console.print("[dim]🎤 未检测到语音，请重试[/dim]")
+
+    def _bottom_toolbar(self):
+        state = self._voice.state
+        if state == VoiceState.RECORDING:
+            dots = [".  ", ".. ", "...", " ..", "  ."]
+            frame = getattr(self, "_voice_dot_frame", 0) % len(dots)
+            self._voice_dot_frame = frame + 1
+            return f"🔴 录制中{dots[frame]}"
+        elif state == VoiceState.TRANSCRIBING:
+            return "⏳ 识别中..."
+        elif state == VoiceState.IDLE:
+            return ""
+        elif state == VoiceState.READY:
+            return ""
+        return ""
+
+    def _restore_session(self, msg: str):
+        """Restore agent context from a checkpoint."""
+        try:
+            data = json.loads(msg)
+            session_id = data["session_id"]
+            context_json = data.get("context_json", "")
+
+            if context_json:
+                from robocode.agent.context import ContextMemory
+
+                self.agent.context = ContextMemory.from_json(context_json)
+                self._session_id = session_id
+                self.tool_guard.set_session_id(session_id)
+                self.agent._session_id = session_id
+
+            self.console.print(
+                Panel(
+                    f"会话: {session_id[:12]}...\n"
+                    f"后端: {data.get('backend', '?')}\n"
+                    f"工具调用: {data.get('calls', 0)} 条\n"
+                    f"检查点步骤: {data.get('step_index', 0)}\n\n"
+                    "[yellow]⚠ 机械臂状态需重新获取（/status）[/yellow]",
+                    title="[bold green]会话已恢复[/bold green]",
+                    border_style="green",
+                )
+            )
+            self._logger.info("session_restored", session_id=session_id)
+        except Exception:
+            self._logger.exception("session_restore_failed")
+            self.console.print("[red]会话恢复失败[/red]")
+
+    def _check_unclosed_sessions(self):
+        """Detect unclosed sessions at startup and show hint."""
+        try:
+            recent = self.db.recent_sessions_with_stats(limit=3)
+            unclosed = [s for s in recent if s.get("status") == "active"]
+            if unclosed:
+                s = unclosed[0]
+                self.console.print(
+                    f"[dim]上次会话 {s['id'][:8]}... 未正常关闭，输入 /resume 恢复[/dim]"
+                )
+        except Exception:
+            pass
+
+    def _get_voice_status_text(self) -> str:
+        state = self._voice.state
+        if state == VoiceState.LOADING:
+            return "语音: 加载中..."
+        elif state == VoiceState.READY:
+            info = self._voice.model_info
+            device = info.get("device", "?").upper()
+            return f"语音: small ({device}) ✓"
+        elif state == VoiceState.UNAVAILABLE:
+            return "语音: 不可用"
+        return "语音: 就绪"
 
     def _show_banner(self):
         backend_info = f"后端: {self.settings.active_backend} ({self.settings.backend.sdk_host}:{self.settings.backend.sdk_port})"
@@ -655,12 +805,14 @@ class RobocodeApp:
                 backend_info += "\n[bold red]⚠ SDK 后端连接失败！当前运行在 DRY-RUN 模式，所有动作均为模拟[/bold red]"
                 backend_info += f"\n[red]原因: {err}[/red]"
 
+        voice_status = self._get_voice_status_text()
         self.console.print(
             Panel(
                 "[bold]robocode[/bold] v0.1.0\n"
                 "Robot Natural Language Agent\n\n"
                 f"{backend_info}\n"
-                f"模型: {self.settings.provider.model}\n\n"
+                f"模型: {self.settings.provider.model}\n"
+                f"{voice_status}\n\n"
                 "输入自然语言指令，或输入 /help 查看命令列表。\n"
                 "提示: python -m robocode --fake  跳过硬件连接，直接进入模拟模式",
                 border_style="red" if (self._backend_fake and not self._explicit_fake) else "green",
@@ -670,8 +822,6 @@ class RobocodeApp:
 
 
 def main():
-    import sys
-
     fake = "--fake" in sys.argv or "--dry-run" in sys.argv
     app = RobocodeApp(fake=fake)
     asyncio.run(app.run())

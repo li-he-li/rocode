@@ -3,6 +3,9 @@
 from enum import Enum
 from robocode.backends.base import RobotBackend
 from robocode.utils.models import RobotStatus, BackendHealth
+from robocode.services.analytics.logger import get_logger
+
+logger = get_logger("backend")
 
 
 class EpisodeVariant(str, Enum):
@@ -30,6 +33,11 @@ class FakeEpisodeAPP:
         return 0.05
 
     def move_xyz_rotation(self, position, orientation, rotation_order="zyx", speed_ratio=1.0):
+        return 0.5
+
+    def move_linear_xyz_rotation(
+        self, position, orientation, rotation_order="zyx", speed_ratio=1.0
+    ):
         return 0.5
 
     def angle_mode(self, angles, speed_ratio=1.0):
@@ -104,6 +112,17 @@ class SdkBackend(RobotBackend):
         speed_ratio: float = 1.0,
     ) -> float:
         return self._client.move_xyz_rotation(position, orientation, rotation_order, speed_ratio)
+
+    def move_linear_xyz_rotation(
+        self,
+        position: list[float],
+        orientation: list[float],
+        rotation_order: str = "zyx",
+        speed_ratio: float = 1.0,
+    ) -> float:
+        return self._client.move_linear_xyz_rotation(
+            position, orientation, rotation_order, speed_ratio
+        )
 
     def angle_mode(self, angles: list[float], speed_ratio: float = 1.0) -> float:
         return self._client.angle_mode(angles, speed_ratio)

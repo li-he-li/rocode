@@ -1,12 +1,34 @@
 """Session context memory — messages follow OpenAI tool-calling spec:
 user/assistant/tool roles, assistant may have tool_calls, tool requires tool_call_id."""
 
+import json
+
 
 class ContextMemory:
     def __init__(self, max_messages: int = 50):
         self.messages: list[dict] = []
         self.max_messages = max_messages
         self.safety_state: dict = {}
+
+    def to_json(self) -> str:
+        """Serialize context to JSON for checkpoint persistence."""
+        return json.dumps(
+            {
+                "messages": self.messages,
+                "max_messages": self.max_messages,
+                "safety_state": self.safety_state,
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, data: str) -> "ContextMemory":
+        """Restore context from serialized JSON."""
+        obj = json.loads(data)
+        ctx = cls(max_messages=obj.get("max_messages", 50))
+        ctx.messages = obj.get("messages", [])
+        ctx.safety_state = obj.get("safety_state", {})
+        return ctx
 
     def add_user_message(self, content: str):
         self.messages.append({"role": "user", "content": content})

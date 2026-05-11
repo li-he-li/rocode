@@ -1,5 +1,6 @@
 """Slash command dispatcher — all commands handled locally, never sent to LLM."""
 
+import json
 from dataclasses import dataclass
 
 
@@ -20,6 +21,7 @@ class SlashDispatcher:
         self._db = db
         self._registry = registry
         self._robot_backend = robot_backend
+        self._voice = None
         # Built-in commands
         for cmd, handler in [
             ("/help", self._help),
@@ -138,26 +140,32 @@ class SlashDispatcher:
         lines.append("\n* = 技能（可能需要人工操作）")
         return SlashResult(handled=True, message="\n".join(lines))
 
-    def _audit(self, _arg: str) -> SlashResult:
+    def _audit(self, arg: str) -> SlashResult:
         if self._db is None:
             return SlashResult(handled=True, message="审计日志: 数据库未初始化")
         try:
-            sessions = self._db.list_sessions(limit=5)
-            lines = ["## 审计日志\n"]
-            for s in sessions:
-                sid = s["id"]
-                lines.append(f"### 会话 {sid[:8]}... ({s['backend']})")
-                calls = self._db.list_tool_calls(sid, limit=20)
-                lines.append(f"  工具调用 ({len(calls)} 条):")
-                for c in calls[-5:]:
-                    lines.append(f"    - [{c['risk_level']}] {c['tool_name']}")
-                approvals = self._db.list_approvals(sid)
-                lines.append(f"  审批记录 ({len(approvals)} 条):")
-                for a in approvals[-5:]:
-                    status = "通过" if a["approved"] else "拒绝"
-                    lines.append(f"    - {a['tool_name']}: {status}")
-                lines.append("")
-            return SlashResult(handled=True, message="\n".join(lines))
+            from robocode.services.analytics.display import (
+                render_session_list,
+                render_tool_stats,
+                render_safety_stats,
+            )
+
+            sub = arg.strip().lower()
+            voice_m = self._voice.get_metrics() if self._voice else None
+
+            if sub == "tools":
+                panel = render_tool_stats(self._db)
+            elif sub == "safety":
+                panel = render_safety_stats(self._db)
+            elif sub in ("", "sessions"):
+                panel = render_session_list(self._db, voice_metrics=voice_m)
+            else:
+                return SlashResult(
+                    handled=True,
+                    message=f"未知 /audit 子命令: {sub}。可用: sessions, tools, safety",
+                )
+
+            return SlashResult(handled=True, message=str(panel))
         except Exception as e:
             return SlashResult(handled=True, message=f"审计日志查询失败: {e}")
 
@@ -170,52 +178,60 @@ class SlashDispatcher:
 
         arg = arg.strip()
         if not arg:
-            # No session ID — list recent sessions
+            # No session ID — list recent sessions with stats
             try:
-                sessions = self._db.list_sessions(limit=10)
+                sessions = self._db.recent_sessions_with_stats(limit=10)
                 if not sessions:
                     return SlashResult(handled=True, message="没有历史会话")
                 lines = ["## 最近会话\n"]
                 for s in sessions:
-                    ck = self._db.get_latest_checkpoint(s["id"])
-                    step_info = f", 步骤: {ck['step_index']}" if ck else ""
+                    total = s.get("total_calls", 0)
+                    success = s.get("success_calls", 0)
+                    rate = f"{success / total * 100:.0f}%" if total > 0 else "N/A"
                     lines.append(
-                        f"  {s['id'][:12]}... 后端:{s['backend']} 状态:{s['status']}{step_info}"
+                        f"  {s['id'][:12]}... {s['backend']} [{s['status']}] "
+                        f"调用:{total} 成功:{rate}"
                     )
                 lines.append("\n输入 /resume <id> 恢复指定会话")
                 return SlashResult(handled=True, message="\n".join(lines))
             except Exception as e:
                 return SlashResult(handled=True, message=f"查询会话失败: {e}")
 
-        # Specific session ID — show details
+        # Specific session ID — restore context
         try:
             session = self._db.get_session(arg)
             if session is None:
-                # Try prefix match
                 sessions = self._db.list_sessions(limit=100)
                 matches = [s for s in sessions if s["id"].startswith(arg)]
                 if not matches:
                     return SlashResult(handled=True, message=f"会话 {arg[:12]}... 不存在")
                 session = matches[0]
 
-            calls = self._db.list_tool_calls(session["id"], limit=50)
-            approvals = self._db.list_approvals(session["id"])
             checkpoint = self._db.get_latest_checkpoint(session["id"])
+            if checkpoint is None:
+                return SlashResult(
+                    handled=True,
+                    message=f"会话 {session['id'][:12]}... 无检查点，无法恢复",
+                )
 
-            lines = [
-                f"## 会话 {session['id'][:12]}...",
-                f"后端: {session['backend']} | 状态: {session['status']}",
-                f"工具调用: {len(calls)} 条 | 审批: {len(approvals)} 条",
-            ]
-            if checkpoint:
-                lines.append(f"最后检查点: 步骤 {checkpoint.get('step_index', 0)}")
-            if calls:
-                lines.append("最近调用:")
-                for c in calls[-5:]:
-                    lines.append(f"  [{c['risk_level']}] {c['tool_name']}")
+            ss = self._db.session_summary(session["id"])
+            calls = ss.get("total_calls", 0)
 
-            lines.append(f"\n会话 {session['id'][:12]}... 的上下文已就绪，可以继续操作。")
-            return SlashResult(handled=True, action="resume_session", message="\n".join(lines))
+            return SlashResult(
+                handled=True,
+                action="resume_session",
+                message=json.dumps(
+                    {
+                        "session_id": session["id"],
+                        "backend": session["backend"],
+                        "calls": calls,
+                        "step_index": checkpoint.get("step_index", 0),
+                        "context_json": json.loads(checkpoint.get("task_plan", "{}")).get(
+                            "context_json", ""
+                        ),
+                    }
+                ),
+            )
         except Exception as e:
             return SlashResult(handled=True, message=f"恢复会话失败: {e}")
 
