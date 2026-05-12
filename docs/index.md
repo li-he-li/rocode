@@ -82,7 +82,7 @@ robocode/
 | 2026-05-04 | Phase 2 全 7 Section 完成，228 tests |
 | 2026-05-06 | 代码审查 + 死代码清理 + 运行时目录重构，230 tests |
 | 2026-05-07 | voice-stt + monitorable-analytics，276 tests |
-| 2026-05-11 | 日志系统重构：log/ → docs/ 分类目录 + frontmatter + index.md |
+| 2026-05-11 | 日志系统重构 + / 命令 Tab 补全（SlashCompleter + complete_while_typing） |
 
 ## 已知问题 / 待办
 

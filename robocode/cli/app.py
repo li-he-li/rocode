@@ -13,9 +13,10 @@ from rich.panel import Panel
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.styles import Style
+from prompt_toolkit.filters import has_completions
 from prompt_toolkit.key_binding import KeyBindings
 
-from robocode.cli.slash import SlashDispatcher
+from robocode.cli.slash import SlashDispatcher, SlashCompleter
 from robocode.cli.skill_loader import load_skills
 from robocode.cli.voice import VoiceController, VoiceState
 from robocode.agent.core import AgentLoop
@@ -70,12 +71,25 @@ class RobocodeApp:
             if self._agent_running:
                 return
             state = self._voice.state
-            if state in (VoiceState.READY, VoiceState.IDLE):
+            if state == VoiceState.LOADING:
+                self.console.print("[dim]🎤 语音模型加载中，请稍候...[/dim]")
+            elif state in (VoiceState.READY, VoiceState.IDLE):
                 self._voice.start_recording()
             elif state == VoiceState.RECORDING:
                 self._voice.stop_recording(trigger="f2")
 
-        self.session = PromptSession(history=InMemoryHistory(), key_bindings=kb)
+        @kb.add("enter", filter=has_completions)
+        def _(event):
+            buf = event.current_buffer
+            if buf.complete_state:
+                buf.apply_completion(buf.complete_state.current_completion)
+
+        self.session = PromptSession(
+            history=InMemoryHistory(),
+            key_bindings=kb,
+            refresh_interval=0.3,
+            complete_while_typing=True,
+        )
         self._running = True
         self._agent_task = None
         self._agent_running = False
@@ -93,6 +107,7 @@ class RobocodeApp:
         self.db.initialize()
         self._session_id = self.db.create_session(backend=self.settings.active_backend)
         self.slash = SlashDispatcher(db=self.db)
+        self.session.completer = SlashCompleter(self.slash)
 
         self.safety = SafetyPolicy(self.settings)
         self.approval = ApprovalGate()
@@ -589,7 +604,7 @@ class RobocodeApp:
                 continue
 
             if user_input.startswith("/"):
-                self._handle_slash(user_input)
+                await self._handle_slash(user_input, _sigint_handler)
             elif self._agent_running:
                 self.console.print("[dim]⏳ Agent 正在执行中，请等待...[/dim]")
             else:
@@ -605,7 +620,7 @@ class RobocodeApp:
         self._voice.shutdown()
         self.db.close()
 
-    def _handle_slash(self, user_input: str):
+    async def _handle_slash(self, user_input: str, sigint_handler):
         result = self.slash.dispatch(user_input)
         if not result.handled:
             self.console.print(Panel(f"未知命令: {user_input}", border_style="red"))
@@ -614,8 +629,9 @@ class RobocodeApp:
             self._trigger_estop()
         if result.exit_requested:
             self._running = False
-        if result.action == "skill_prompt":
-            asyncio.create_task(self._handle_chat(result.message))
+        if result.action in ("skill_prompt", "chat"):
+            signal.signal(signal.SIGINT, sigint_handler)
+            await self._handle_chat(result.message)
             return
         if result.action == "resume_session":
             self._restore_session(result.message)
@@ -733,6 +749,8 @@ class RobocodeApp:
             return f"🔴 录制中{dots[frame]}"
         elif state == VoiceState.TRANSCRIBING:
             return "⏳ 识别中..."
+        elif state == VoiceState.LOADING:
+            return "⏳ 语音模型加载中..."
         elif state == VoiceState.IDLE:
             return ""
         elif state == VoiceState.READY:
