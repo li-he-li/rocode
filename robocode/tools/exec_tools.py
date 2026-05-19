@@ -1,41 +1,35 @@
 """Controlled host execution — operator-approved subprocess with audit."""
 
+import re
+import shlex
 import subprocess
 from robocode.utils.models import ToolResult
 
-
-FORBIDDEN_CMDS = [
-    "rm -rf /",
-    "mkfs.",
-    "dd if=",
-    "dd of=",
-    ":(){ :|:& };:",  # fork bomb
-    "shutdown",
-    "reboot",
-    "halt",
-    "poweroff",
-    "chmod 777 /",
-    "chmod +x",
-    "chown -r",
-    "wget ",
-    "curl ",
-    "| tee ",
-    "tee /",
+FORBIDDEN_PATTERNS = [
+    re.compile(p)
+    for p in [
+        r"rm\s+-rf\s+/",
+        r"mkfs\.",
+        r"dd\s+(if|of)=",
+        r":\(\)\{\s*:\|:&\s*\};:",
+        r"\b(shutdown|reboot|halt|poweroff)\b",
+        r"\b(wget|curl)\b",
+        r"\bpip\s+install\b",
+        r"\bapt(-get)?\s+install\b",
+        r"\byum\s+install\b",
+    ]
 ]
 
-
-def _normalize_whitespace(s: str) -> str:
-    import re
-
-    return re.sub(r"\s+", " ", s).strip()
+SHELL_META_PATTERN = re.compile(r"[|;`$>&<\n\r]")
 
 
 def _is_safe(command: str) -> tuple[bool, str]:
-    normalized = _normalize_whitespace(command.lower())
-    for bad in FORBIDDEN_CMDS:
-        bad_normalized = _normalize_whitespace(bad)
-        if bad_normalized in normalized:
-            return False, f"命令包含禁止操作: {bad}"
+    if SHELL_META_PATTERN.search(command):
+        return False, "命令包含 shell 元字符 (| ; ` $ > & <)，仅允许单命令"
+    for pattern in FORBIDDEN_PATTERNS:
+        match = pattern.search(command)
+        if match:
+            return False, f"命令包含禁止操作: {match.group()}"
     return True, ""
 
 
@@ -45,9 +39,14 @@ def execute_command(*, command: str, timeout_s: float = 30.0, cwd: str = "", **k
         return ToolResult(success=False, message=reason).model_dump(mode="json")
 
     try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return ToolResult(success=False, message=f"命令解析失败: {e}").model_dump(mode="json")
+
+    try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            args,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=timeout_s,
@@ -62,6 +61,8 @@ def execute_command(*, command: str, timeout_s: float = 30.0, cwd: str = "", **k
                 "returncode": proc.returncode,
             },
         ).model_dump(mode="json")
+    except FileNotFoundError:
+        return ToolResult(success=False, message=f"命令未找到: {args[0]}").model_dump(mode="json")
     except subprocess.TimeoutExpired:
         return ToolResult(success=False, message=f"命令超时 ({timeout_s}s)").model_dump(mode="json")
     except Exception as e:

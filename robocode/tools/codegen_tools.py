@@ -1,5 +1,7 @@
 """SDK code generation tools — escape hatch: generate, approve, sandbox, execute."""
 
+import os
+import resource
 import time
 import subprocess
 import re
@@ -10,15 +12,12 @@ _ROBOCODE_DIR = Path(__file__).resolve().parent.parent  # robocode/
 _GENERATED_DIR = _ROBOCODE_DIR / ".temp" / "generated"
 
 FORBIDDEN_PATTERNS = [
-    # Existing: socket, os, subprocess, eval/exec, ctypes, open write
     r"import\s+socket",
     r"from\s+socket\s+import",
-    r"os\.remove\(",
-    r"os\.unlink\(",
-    r"os\.rmdir\(",
-    r"os\.system\(",
-    r"os\.popen\(",
-    r"shutil\.rmtree\(",
+    r"os\.",
+    r"os\s*,",
+    r"import\s+os\b",
+    r"from\s+os\b",
     r"subprocess\.",
     r"__import__\(",
     r"eval\(",
@@ -26,19 +25,22 @@ FORBIDDEN_PATTERNS = [
     r"open\([^)]*['\"][wa]",
     r"open\([^)]*mode\s*=\s*['\"][wa]",
     r"ctypes\.",
-    # 0.4.1: 12 new patterns for pathlib, io.open, compile, importlib, shutil
-    r"\.write_text\(",  # pathlib.Path().write_text()
-    r"\.write_bytes\(",  # pathlib.Path().write_bytes()
-    r"io\.open\(",  # io.open()
-    r"builtins\.open\(",  # builtins.open()
-    r"compile\s*\(\s*[^,]+,\s*[^,]+,\s*['\"]exec",  # compile(..., 'exec')
-    r"importlib\.import_module\(",  # dynamic import bypass
-    r"shutil\.copy\(",  # shutil.copy()
-    r"shutil\.move\(",  # shutil.move()
-    r"shutil\.copytree\(",  # shutil.copytree()
-    r"open\([^)]*['\"][wa][b+]?['\"]",  # open with write/append mode (w/wb/wa/a/ab)
-    r"os\.chmod\(",  # os.chmod()
-    r"os\.chown\(",  # os.chown()
+    r"\.write_text\(",
+    r"\.write_bytes\(",
+    r"io\.open\(",
+    r"builtins\.open\(",
+    r"compile\s*\(\s*[^,]+,\s*[^,]+,\s*['\"]exec",
+    r"importlib\b",
+    r"shutil\.",
+    r"__subclasses__",
+    r"__builtins__",
+    r"getattr\s*\(\s*__",
+    r"globals\s*\(",
+    r"locals\s*\(",
+    r"vars\s*\(",
+    r"dir\s*\(\s*__",
+    r"\bgetattr\b.*\.__class__",
+    r"type\s*\(\s*__",
 ]
 
 
@@ -46,7 +48,7 @@ class CodeSandbox:
     # Parameter names MUST match real FakeEpisodeAPP — LLM uses keyword args per API docs
     SANDBOX_HEADER = """
 # Auto-generated sandbox preamble
-import sys, os, json, math, time
+import sys, json, math, time
 
 class _SandboxEpisodeAPP:
     def move_xyz_rotation(self, position, orientation, rotation_order="zyx", speed_ratio=1.0):
@@ -72,6 +74,11 @@ robot = _SandboxEpisodeAPP()
     @classmethod
     def scan_forbidden(cls, code: str) -> list[str]:
         return [p for p in FORBIDDEN_PATTERNS if re.search(p, code)]
+
+    @classmethod
+    def _sandbox_prelude(cls):
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
 
     @classmethod
     def run(cls, code: str, timeout_s: float = 30.0, save: bool = True) -> dict:
@@ -100,11 +107,18 @@ robot = _SandboxEpisodeAPP()
 
         t0 = time.perf_counter()
         try:
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k.startswith(("PYTHON", "PATH", "HOME", "LANG", "LC_", "TMPDIR", "USER"))
+            }
             proc = subprocess.run(
                 ["python3", "-I", "-c", full_code],
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
+                preexec_fn=cls._sandbox_prelude,
+                env=clean_env,
             )
             elapsed = (time.perf_counter() - t0) * 1000
             return {

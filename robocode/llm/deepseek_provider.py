@@ -2,6 +2,7 @@
 
 import json
 import time
+import httpx
 from openai import AsyncOpenAI
 from robocode.config import Settings
 from robocode.llm.base import LLMProvider, StreamEvent
@@ -13,9 +14,11 @@ logger = get_logger("llm")
 class DeepSeekProvider(LLMProvider):
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
+        http_client = httpx.AsyncClient(trust_env=False)
         self._client = AsyncOpenAI(
             api_key=self.settings.provider.api_key or "<MISSING>",
             base_url=self.settings.provider.base_url,
+            http_client=http_client,
         )
 
     async def stream(self, system: str, messages: list[dict], tools: list[dict]):
@@ -26,8 +29,9 @@ class DeepSeekProvider(LLMProvider):
             "messages": [{"role": "system", "content": system}] + messages,
             "stream": True,
             "max_tokens": 2048,
-            "extra_body": {"thinking": {"type": "disabled"}},
         }
+        if not self.settings.provider.thinking_enabled:
+            params["extra_body"] = {"thinking": {"type": "disabled"}}
         if tools:
             params["tools"] = tools
         api_stream = await self._client.chat.completions.create(**params)

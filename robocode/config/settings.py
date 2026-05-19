@@ -10,6 +10,7 @@ class ProviderConfig(BaseModel):
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-v4-flash"
+    thinking_enabled: bool = False
 
 
 class BackendEndpoints(BaseModel):
