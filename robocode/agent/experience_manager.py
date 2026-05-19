@@ -83,6 +83,9 @@ class ExperienceManager:
             if before is None or after is None:
                 skipped_incomplete += 1
                 continue
+            if None in before or None in after:
+                skipped_incomplete += 1
+                continue
             delta = [abs(a - b) for a, b in zip(after, before)]
             by_tool[r["tool_name"]].append(
                 {

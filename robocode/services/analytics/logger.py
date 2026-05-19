@@ -50,7 +50,10 @@ def setup_logging(level=logging.INFO):
     # Console handler (text format) — suppress noisy voice logs from terminal
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
-    console_handler.addFilter(lambda record: not record.name.startswith("voice"))
+    _SUPPRESSED_PREFIXES = ("voice", "experience_manager", "experience_filesystem", "reflector")
+    console_handler.addFilter(
+        lambda record: not any(record.name.startswith(p) for p in _SUPPRESSED_PREFIXES)
+    )
     console_handler.setFormatter(
         structlog.stdlib.ProcessorFormatter(
             processor=structlog.dev.ConsoleRenderer(),
