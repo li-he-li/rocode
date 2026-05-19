@@ -364,7 +364,7 @@ class RobocodeApp:
             ),
             ToolEntry(
                 name="execute_command",
-                description="【L2 需审批】在主机上执行命令。危险命令(rm -rf /, shutdown等)硬拦截。优先使用 read_file/search_code/run_script 替代。",
+                description="【L2 需审批】在主机上执行单条命令（不支持管道|重定向|链式;）。危险命令硬拦截。复杂 shell 操作请用 generate_and_run_sdk_code。",
                 parameters={
                     "type": "object",
                     "properties": {
