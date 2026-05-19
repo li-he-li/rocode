@@ -25,6 +25,8 @@ class SlashDispatcher:
         self._registry = registry
         self._robot_backend = robot_backend
         self._voice = None
+        self._annotation_collector = None
+        self._agent = None
         # Built-in commands
         for cmd, desc, handler in [
             ("/help", "显示帮助", self._help),
@@ -37,6 +39,8 @@ class SlashDispatcher:
             ("/backend", "显示/切换后端", self._backend),
             ("/estop", "立即急停", self._estop),
             ("/approve-all", "本会话全部免审批", self._approve_all),
+            ("/done", "完成任务标注", self._done),
+            ("/exp-manage", "手动触发经验整理", self._exp_manage),
         ]:
             self._commands[cmd] = handler
             self._descriptions[cmd] = desc
@@ -117,15 +121,14 @@ class SlashDispatcher:
             "  /backend     显示/切换后端",
             "  /estop       立即急停",
             "  /approve-all 本会话全部免审批",
+            "  /done        完成任务标注",
+            "  /exp-manage  手动触发经验整理",
         ]
         if self._skills_help:
             lines.append("")
             lines.append("技能 (/<技能名> 查看详情)：")
             lines.extend(self._skills_help)
         return self._chat_if_args("help", "\n".join(lines), arg)
-
-    def _exit(self, _arg: str) -> SlashResult:
-        return SlashResult(handled=True, exit_requested=True, message="再见~")
 
     def _status(self, arg: str) -> SlashResult:
         lines = ["## 系统状态\n"]
@@ -201,22 +204,31 @@ class SlashDispatcher:
 
         arg = arg.strip()
         if not arg:
-            # No session ID — list recent sessions with stats
+            # No session ID — list recent sessions for interactive selection
             try:
                 sessions = self._db.recent_sessions_with_stats(limit=10)
                 if not sessions:
                     return SlashResult(handled=True, message="没有历史会话")
-                lines = ["## 最近会话\n"]
+                # Return list + action for app.py to handle interactive selection
+                session_list = []
                 for s in sessions:
                     total = s.get("total_calls", 0)
                     success = s.get("success_calls", 0)
                     rate = f"{success / total * 100:.0f}%" if total > 0 else "N/A"
-                    lines.append(
-                        f"  {s['id'][:12]}... {s['backend']} [{s['status']}] "
-                        f"调用:{total} 成功:{rate}"
+                    session_list.append(
+                        {
+                            "id": s["id"],
+                            "backend": s.get("backend", "?"),
+                            "status": s.get("status", "?"),
+                            "total_calls": total,
+                            "success_rate": rate,
+                        }
                     )
-                lines.append("\n输入 /resume <id> 恢复指定会话")
-                return SlashResult(handled=True, message="\n".join(lines))
+                return SlashResult(
+                    handled=True,
+                    action="resume_select",
+                    message=json.dumps(session_list),
+                )
             except Exception as e:
                 return SlashResult(handled=True, message=f"查询会话失败: {e}")
 
@@ -230,33 +242,35 @@ class SlashDispatcher:
                     return SlashResult(handled=True, message=f"会话 {arg[:12]}... 不存在")
                 session = matches[0]
 
-            checkpoint = self._db.get_latest_checkpoint(session["id"])
-            if checkpoint is None:
-                return SlashResult(
-                    handled=True,
-                    message=f"会话 {session['id'][:12]}... 无检查点，无法恢复",
-                )
-
-            ss = self._db.session_summary(session["id"])
-            calls = ss.get("total_calls", 0)
-
-            return SlashResult(
-                handled=True,
-                action="resume_session",
-                message=json.dumps(
-                    {
-                        "session_id": session["id"],
-                        "backend": session["backend"],
-                        "calls": calls,
-                        "step_index": checkpoint.get("step_index", 0),
-                        "context_json": json.loads(checkpoint.get("task_plan", "{}")).get(
-                            "context_json", ""
-                        ),
-                    }
-                ),
-            )
+            return self._build_resume_result(session)
         except Exception as e:
             return SlashResult(handled=True, message=f"恢复会话失败: {e}")
+
+    def _build_resume_result(self, session: dict) -> SlashResult:
+        """Build SlashResult for resuming a specific session."""
+        checkpoint = self._db.get_latest_checkpoint(session["id"])
+        if checkpoint is None:
+            return SlashResult(
+                handled=True,
+                message=f"会话 {session['id'][:12]}... 无检查点，无法恢复",
+            )
+        ss = self._db.session_summary(session["id"])
+        calls = ss.get("total_calls", 0)
+        return SlashResult(
+            handled=True,
+            action="resume_session",
+            message=json.dumps(
+                {
+                    "session_id": session["id"],
+                    "backend": session["backend"],
+                    "calls": calls,
+                    "step_index": checkpoint.get("step_index", 0),
+                    "context_json": json.loads(checkpoint.get("task_plan", "{}")).get(
+                        "context_json", ""
+                    ),
+                }
+            ),
+        )
 
     def _backend(self, arg: str) -> SlashResult:
         output = "当前后端: sdk (localhost:12345)"
@@ -275,6 +289,24 @@ class SlashDispatcher:
             action="approve_all",
             message="本会话所有 L2 工具已免审批。可通过 /approve-all 再次切换。",
         )
+
+    def _done(self, _arg: str) -> SlashResult:
+        return SlashResult(handled=True, action="annotation_panel", message="")
+
+    def _exp_manage(self, _arg: str) -> SlashResult:
+        return SlashResult(handled=True, action="exp_manage", message="")
+
+    def _exit(self, arg: str) -> SlashResult:
+        # Check for unannotated items
+        if self._annotation_collector is not None:
+            unannotated = self._annotation_collector.count_unannotated()
+            if unannotated > 0:
+                return SlashResult(
+                    handled=True,
+                    action="exit_with_annotations",
+                    message=str(unannotated),
+                )
+        return SlashResult(handled=True, exit_requested=True, message="再见~")
 
 
 class SlashCompleter(Completer):

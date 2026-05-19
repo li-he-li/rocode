@@ -90,8 +90,8 @@ class ToolGuard:
 
         # Need owner approval
         if self._owner_callback is None:
-            return self._record_and_return(
-                tool_name, risk_level, params, "rejected", "no approval callback configured"
+            return self._record_rejection(
+                tool_name, risk_level, params, "no approval callback configured"
             )
 
         decision = await self._owner_callback(tool_name, risk_level, params, summary)
@@ -140,28 +140,40 @@ class ToolGuard:
             except Exception:
                 logger.error("audit_approval_write_failed", exc_info=True)
 
-    def _record_and_return(
-        self, tool_name: str, risk_level: str, params: dict, decision: str, reason: str
+    def _record_rejection(
+        self, tool_name: str, risk_level: str, params: dict, reason: str
     ) -> GuardResult:
         if self._metrics is not None:
             self._metrics.record("safety_rejection")
         logger.info("tool_rejected", tool_name=tool_name, reason=reason)
-        self._record_approval(tool_name, risk_level, decision != "rejected")
-        return GuardResult(allowed=False, reason=reason, decision=decision)
+        self._record_approval(tool_name, risk_level, approved=False)
+        return GuardResult(allowed=False, reason=reason, decision="rejected")
 
     def record_call(
-        self, tool_name: str, risk_level: str, params: dict, result: dict, duration_ms: float = 0
-    ):
-        """Record tool call to audit DB after execution."""
+        self,
+        tool_name: str,
+        risk_level: str,
+        params: dict,
+        result: dict,
+        duration_ms: float = 0,
+        task_instruction: str | None = None,
+        turn_number: int | None = None,
+        prev_call_id: int | None = None,
+    ) -> int | None:
+        """Record tool call to audit DB after execution. Returns lastrowid or None."""
         if self._db and self._session_id:
             try:
-                self._db.record_tool_call(
+                return self._db.record_tool_call(
                     self._session_id,
                     tool_name,
                     risk_level,
                     params if params else {},
                     result if result else {},
                     duration_ms=duration_ms,
+                    task_instruction=task_instruction,
+                    turn_number=turn_number,
+                    prev_call_id=prev_call_id,
                 )
             except Exception:
                 logger.error("audit_tool_call_write_failed", exc_info=True)
+        return None

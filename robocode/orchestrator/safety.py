@@ -81,6 +81,11 @@ class SafetyPolicy:
         return SafetyCheck(passed=True)
 
     def check_speed(self, speed_ratio: float) -> SafetyCheck:
+        if speed_ratio <= 0:
+            return SafetyCheck(
+                passed=False,
+                reason=f"速度比 {speed_ratio} 必须为正数",
+            )
         if speed_ratio > self.settings.workspace.max_speed_ratio:
             return SafetyCheck(
                 passed=False,

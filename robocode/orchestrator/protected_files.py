@@ -17,14 +17,30 @@ PROTECTED_FILES: list[str] = [
     # Approval gates — L2 enforcement, session auto-approval
     "robocode/orchestrator/approval.py",
     "robocode/orchestrator/tool_guard.py",
+    "robocode/orchestrator/protected_files.py",
     # Emergency stop — local immediate command, bypasses LLM
     "robocode/cli/slash.py",  # /estop handler
     "robocode/cli/app.py",  # _trigger_estop, esc watcher
+    # Agent core — tool execution loop, system prompt, risk gate integration
+    "robocode/agent/core.py",
+    "robocode/agent/context.py",
+    # Experience system — prompt injection, experience generation
+    "robocode/agent/experience_manager.py",
+    "robocode/agent/experience_reader.py",
+    "robocode/agent/experience_filesystem.py",
+    "robocode/agent/physics_collector.py",
+    "robocode/agent/annotation.py",
     # Tool registry enforcement — registration, risk levels, schemas
     "robocode/tools/registry.py",
+    # Hardware-facing tools — direct robot control
+    "robocode/tools/motion_tools.py",
+    "robocode/tools/gripper_tools.py",
+    "robocode/tools/script_tools.py",
     # Code sandbox — forbidden patterns, isolation
     "robocode/tools/codegen_tools.py",
     "robocode/tools/exec_tools.py",
+    # Audit DB — schema, aggregation queries
+    "robocode/services/analytics/db.py",
 ]
 
 # Resolved absolute paths for matching

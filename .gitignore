@@ -72,6 +72,15 @@ src/6D/6D/6d/4.test_gripper.py
 # Robot state dumps
 src/episode1_0307.robot
 
+# Reference data (URDF resources)
+src/student_ros/src/episode1_urdf_1113/resource/
+src/student_ros/src/episode_controller/resource/
+src/student_ros/src/episode_controller/test/
+
+# Untracked planning / reference
+world model.txt
+进化.md
+
 # Calibration images (large binary data)
 src/6D/6D/6d/calibration_images/
 

@@ -136,5 +136,12 @@ class SdkBackend(RobotBackend):
     def servo_gripper(self, angle: int) -> float:
         return self._client.servo_gripper(angle)
 
+    def get_motor_angles(self) -> list[float] | None:
+        try:
+            angles = self._client.get_motor_angles()
+            return list(angles) if angles is not None else None
+        except Exception:
+            return None
+
     def shutdown(self):
         self._connected = False

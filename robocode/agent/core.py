@@ -63,6 +63,9 @@ class AgentLoop:
         db=None,
         session_id: str = "",
         metrics=None,
+        physics_collector=None,
+        annotation_collector=None,
+        experience_reader=None,
     ):
         self.provider = provider
         self.tool_handlers = tool_handlers or {}
@@ -75,6 +78,13 @@ class AgentLoop:
         self._db = db
         self._session_id = session_id
         self._metrics = metrics
+        self._physics_collector = physics_collector
+        self._annotation_collector = annotation_collector
+        self._experience_reader = experience_reader
+        self._turn_number = 0
+        self._prev_call_id: int | None = None
+        self._current_task_instruction: str | None = None
+        self._system_prompt = self._build_system_prompt()
 
     async def execute_tool(self, event: StreamEvent) -> dict:
         return await self._execute_tool(event)
@@ -82,6 +92,9 @@ class AgentLoop:
     async def run_turn(self, user_input: str) -> str:
         self._state = OrchestratorState.PLANNING
         self.context.add_user_message(user_input)
+        self._current_task_instruction = user_input
+        self._turn_number = 0
+        self._prev_call_id = None
         last_text = ""
 
         for iteration in range(self.max_iterations):
@@ -90,7 +103,7 @@ class AgentLoop:
             reasoning_content = ""
 
             async for event in self.provider.stream(
-                system=SYSTEM_PROMPT,
+                system=self._system_prompt,
                 messages=self.context.to_llm_messages(),
                 tools=self.tool_schemas,
             ):
@@ -159,6 +172,23 @@ class AgentLoop:
         self._save_checkpoint()
         return "已达最大迭代次数，任务未完成。"
 
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with optional experience index summary appended."""
+        prompt = SYSTEM_PROMPT
+        if self._experience_reader is not None:
+            summary = self._experience_reader.get_index_summary()
+            if summary:
+                prompt += "\n\n" + summary
+        return prompt
+
+    def inject_failure_annotation(self, tool_name: str, failures: list[str]):
+        """Inject failure annotation into current conversation context."""
+        failure_summary = "；".join(failures)
+        self.context.add_user_message(
+            f"[系统反馈] 上一操作 {tool_name} 标注为失败：{failure_summary}。"
+            f"请在后续操作中注意避免此问题。"
+        )
+
     def _save_checkpoint(self):
         if self._db and self._session_id:
             try:
@@ -202,6 +232,13 @@ class AgentLoop:
                     metrics={"decision": gr.decision},
                 ).model_dump(mode="json")
 
+        # Physics capture before (L1/L2 only)
+        before_snapshot = None
+        tool_call_id = None
+        duration_ms = 0.0
+        if risk_level in ("L1", "L2") and self._physics_collector is not None:
+            before_snapshot = self._physics_collector.capture_before(tool_name)
+
         t0 = _time.perf_counter()
         try:
             if asyncio.iscoroutinefunction(handler):
@@ -216,9 +253,18 @@ class AgentLoop:
                 self._metrics.record("tool_execution_total")
 
             logger.info("tool_execution_completed", tool_name=tool_name, duration_ms=duration_ms)
-            # Record to audit DB
+            # Record to audit DB (with call flow context)
             if self.guard is not None:
-                self.guard.record_call(tool_name, risk_level, tool_input, rv, duration_ms)
+                tool_call_id = self.guard.record_call(
+                    tool_name,
+                    risk_level,
+                    tool_input,
+                    rv,
+                    duration_ms,
+                    task_instruction=self._current_task_instruction,
+                    turn_number=self._turn_number,
+                    prev_call_id=self._prev_call_id,
+                )
             return rv
         except Exception:
             duration_ms = (_time.perf_counter() - t0) * 1000
@@ -228,5 +274,39 @@ class AgentLoop:
                 message=f"工具 {tool_name} 执行异常",
             ).model_dump(mode="json")
             if self.guard is not None:
-                self.guard.record_call(tool_name, risk_level, tool_input, error_result, duration_ms)
+                tool_call_id = self.guard.record_call(
+                    tool_name,
+                    risk_level,
+                    tool_input,
+                    error_result,
+                    duration_ms,
+                    task_instruction=self._current_task_instruction,
+                    turn_number=self._turn_number,
+                    prev_call_id=self._prev_call_id,
+                )
             return error_result
+        finally:
+            # Physics capture after (L1/L2 only)
+            if before_snapshot is not None and self._physics_collector is not None:
+                speed_ratio = tool_input.get("speed_ratio", 1.0)
+                self._physics_collector.capture_after(
+                    tool_name,
+                    before_snapshot,
+                    tool_call_id=tool_call_id,
+                    duration_ms=duration_ms,
+                    speed_ratio=speed_ratio,
+                )
+            # Register with annotation collector (L1/L2 only)
+            if (
+                tool_call_id
+                and risk_level in ("L1", "L2")
+                and self._annotation_collector is not None
+            ):
+                self._annotation_collector.register_tool_call(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    params=tool_input,
+                )
+            # Advance call flow tracking
+            self._prev_call_id = tool_call_id
+            self._turn_number += 1

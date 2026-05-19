@@ -37,12 +37,13 @@ except ImportError:
     _wvad = None
     _HAS_VAD = False
 
-try:
-    from faster_whisper import WhisperModel as _WhisperModel
+_HAS_FW = True
 
-    _HAS_FW = True
-except ImportError:
-    _WhisperModel = None
+try:
+    import importlib
+
+    importlib.util.find_spec("faster_whisper")
+except (ImportError, ModuleNotFoundError):
     _HAS_FW = False
 
 
@@ -139,8 +140,14 @@ class VoiceController:
                     continue  # resample ratio must be integer
                 try:
                     got_data = []
+                    warmup_skipped = 0
+                    warmup_max = 10
 
                     def _test_cb(indata, frames, time_info, status):
+                        nonlocal warmup_skipped
+                        if warmup_skipped < warmup_max and not np.any(indata != 0):
+                            warmup_skipped += 1
+                            return
                         got_data.append(indata.copy())
                         if len(got_data) >= 3:
                             raise _sd.CallbackStop()
@@ -156,7 +163,7 @@ class VoiceController:
                     ):
                         import time as _t
 
-                        _t.sleep(0.3)
+                        _t.sleep(1.5)
 
                     if got_data and any(np.any(c != 0) for c in got_data):
                         self._input_device_index = idx
@@ -195,7 +202,9 @@ class VoiceController:
             except ImportError:
                 device, compute = "cpu", "int8"
 
-            self._model = _WhisperModel("small", device=device, compute_type=compute)
+            from faster_whisper import WhisperModel
+
+            self._model = WhisperModel("small", device=device, compute_type=compute)
             load_ms = (time.time() - t0) * 1000
             self._model_info = {
                 "model": "small",

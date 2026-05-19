@@ -1,6 +1,7 @@
 """Rich Table rendering for /audit command views."""
 
 from rich.columns import Columns
+from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
 
@@ -17,6 +18,8 @@ def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
     table.add_column("状态", width=6)
     table.add_column("工具调用", justify="right")
     table.add_column("成功率", justify="right")
+    table.add_column("物理采集", justify="right")
+    table.add_column("已标注", justify="right")
     table.add_column("总耗时", justify="right")
 
     for s in sessions:
@@ -24,8 +27,19 @@ def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
         total = s.get("total_calls", 0)
         success = s.get("success_calls", 0)
         rate = f"{success / total * 100:.0f}%" if total > 0 else "N/A"
+        physics = str(s.get("physics_captured", 0))
+        annotated = str(s.get("annotated", 0))
         dur = f"{s.get('total_duration_ms', 0):.0f}ms"
-        table.add_row(sid, s.get("backend", "?"), s.get("status", "?"), str(total), rate, dur)
+        table.add_row(
+            sid,
+            s.get("backend", "?"),
+            s.get("status", "?"),
+            str(total),
+            rate,
+            physics,
+            annotated,
+            dur,
+        )
 
     lines = [table]
 
@@ -52,7 +66,7 @@ def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
 
 
 def render_tool_stats(db, session_id: str | None = None) -> Panel:
-    """Per-tool latency and success rate."""
+    """Per-tool latency and success rate, with physics/annotation coverage."""
     # Use most recent session if none specified
     if session_id is None:
         sessions = db.list_sessions(limit=1)
@@ -85,7 +99,24 @@ def render_tool_stats(db, session_id: str | None = None) -> Panel:
             f"{lr.get('avg_ms', 0):.0f}ms",
         )
 
-    return Panel(table, title="audit tools")
+    # Append physics and annotation coverage
+    lines = [table]
+
+    pstats = db.physics_stats(session_id)
+    if pstats and pstats.get("total_physics", 0) > 0:
+        lines.append(
+            f"[dim]📊 物理数据采集: {pstats['total_physics']} 条"
+            f" | 平均延时 {pstats.get('avg_duration_ms', 0):.0f}ms[/dim]"
+        )
+
+    astats = db.annotation_stats(session_id)
+    if astats:
+        total = astats.get("total_calls", 0) or 0
+        annotated = astats.get("annotated_count", 0) or 0
+        coverage = f"{annotated / total * 100:.0f}%" if total > 0 else "N/A"
+        lines.append(f"[dim]🏷 标注覆盖率: {annotated}/{total} ({coverage})[/dim]")
+
+    return Panel(Group(*lines), title="audit tools")
 
 
 def render_safety_stats(db, session_id: str | None = None) -> Panel:
