@@ -20,6 +20,9 @@ from robocode.cli.slash import SlashDispatcher, SlashCompleter
 from robocode.cli.skill_loader import load_skills
 from robocode.cli.voice import VoiceController, VoiceState
 from robocode.agent.core import AgentLoop
+from robocode.agent.physics_collector import PhysicsCollector
+from robocode.agent.annotation import AnnotationCollector
+from robocode.agent.experience_reader import ExperienceReader
 from robocode.llm.deepseek_provider import DeepSeekProvider
 from robocode.config import Settings
 from robocode.tools.registry import ToolEntry, SkillEntry, ToolRegistry
@@ -106,6 +109,7 @@ class RobocodeApp:
         self.db = AuditDB()
         self.db.initialize()
         self._session_id = self.db.create_session(backend=self.settings.active_backend)
+        self._startup_cleanup()
         self.slash = SlashDispatcher(db=self.db)
         self.session.completer = SlashCompleter(self.slash)
 
@@ -168,6 +172,23 @@ class RobocodeApp:
             metrics=self.metrics,
         )
 
+        # Physics data collector
+        self.physics_collector = PhysicsCollector(
+            backend=self.backend,
+            db=self.db,
+            session_id=self._session_id,
+            metrics=self.metrics,
+        )
+
+        # Annotation collector
+        self.annotation_collector = AnnotationCollector(
+            db=self.db,
+            session_id=self._session_id,
+        )
+
+        # Experience reader — loads index at startup
+        self.experience_reader = ExperienceReader()
+
         # Agent
         self.agent = AgentLoop(
             provider=DeepSeekProvider(self.settings),
@@ -178,12 +199,41 @@ class RobocodeApp:
             db=self.db,
             session_id=self._session_id,
             metrics=self.metrics,
+            physics_collector=self.physics_collector,
+            annotation_collector=self.annotation_collector,
+            experience_reader=self.experience_reader,
         )
 
         # Wire registry + backend + voice into slash dispatcher (created before them)
         self.slash._registry = self.registry
         self.slash._robot_backend = self.backend
         self.slash._voice = self._voice
+        self.slash._annotation_collector = self.annotation_collector
+        self.slash._agent = self.agent
+
+    def _startup_cleanup(self):
+        """Clean up interrupted sessions, expired sessions, and requeue failed items."""
+        try:
+            log = get_logger("app")
+            # Find sessions that were not properly closed
+            sessions = self.db.list_sessions(limit=50)
+            cleaned = 0
+            for s in sessions:
+                if s.get("status") == "active" and s["id"] != self._session_id:
+                    self.db.cleanup_interrupted_session(s["id"])
+                    cleaned += 1
+            if cleaned:
+                log.info("startup_interrupted_sessions_cleaned", count=cleaned)
+            # Delete sessions older than 7 days
+            expired = self.db.cleanup_old_sessions(ttl_days=7)
+            if expired:
+                log.info("startup_expired_sessions_cleaned", count=expired)
+            # Delete empty sessions (0 tool calls, except current)
+            empty = self.db.cleanup_empty_sessions(current_session_id=self._session_id)
+            if empty:
+                log.info("startup_empty_sessions_cleaned", count=empty)
+        except Exception:
+            pass
 
     def _register_tools(self):
         entries = [
@@ -599,6 +649,7 @@ class RobocodeApp:
                 user_input = user_input.strip()
             except (KeyboardInterrupt, EOFError):
                 self.console.print("\n再见~")
+                await self._run_exp_manage()
                 break
             if not user_input:
                 continue
@@ -620,6 +671,13 @@ class RobocodeApp:
         self._voice.shutdown()
         self.db.close()
 
+    def _trigger_estop(self):
+        try:
+            self.backend.emergency_stop(True)
+            self.console.print("[bold red]⚠ 急停已执行[/bold red]")
+        except Exception:
+            self.console.print("[bold red]⚠ 急停失败（后端不可用）[/bold red]")
+
     async def _handle_slash(self, user_input: str, sigint_handler):
         result = self.slash.dispatch(user_input)
         if not result.handled:
@@ -628,6 +686,7 @@ class RobocodeApp:
         if result.estop_requested:
             self._trigger_estop()
         if result.exit_requested:
+            await self._run_exp_manage()
             self._running = False
         if result.action in ("skill_prompt", "chat"):
             signal.signal(signal.SIGINT, sigint_handler)
@@ -636,9 +695,21 @@ class RobocodeApp:
         if result.action == "resume_session":
             self._restore_session(result.message)
             return
+        if result.action == "resume_select":
+            await self._handle_resume_select(result.message)
+            return
         if result.action == "approve_all":
             self.approval.approve_all()
             self.console.print("[bold green]✅ 本会话所有 L2 工具已免审批[/bold green]")
+            return
+        if result.action == "annotation_panel":
+            await self._run_annotation_panel()
+            return
+        if result.action == "exit_with_annotations":
+            await self._handle_exit_with_annotations(int(result.message))
+            return
+        if result.action == "exp_manage":
+            await self._run_exp_manage()
             return
         self.console.print(Panel(result.message, title="slash", border_style="blue"))
 
@@ -657,6 +728,11 @@ class RobocodeApp:
             if result:
                 sys.stdout.write("\n")
                 sys.stdout.flush()
+            # Auto-prompt for annotation after LLM completes a task
+            if result and not from_voice:
+                pending_count = self.annotation_collector.count_unannotated()
+                if pending_count > 0:
+                    await self._prompt_annotation_after_task(pending_count)
         except asyncio.CancelledError:
             display.print(Panel("已中断", title="cancel", border_style="yellow"))
         except Exception as e:
@@ -757,6 +833,90 @@ class RobocodeApp:
             return ""
         return ""
 
+    async def _handle_resume_select(self, msg: str):
+        """Interactive session selection with arrow keys."""
+        import json as _json
+        import tty
+        import termios
+        from rich.live import Live
+        from rich.table import Table
+        from rich.text import Text
+
+        try:
+            sessions = _json.loads(msg)
+        except Exception:
+            self.console.print("[red]会话列表解析失败[/red]")
+            return
+
+        n = len(sessions)
+        if n == 0:
+            self.console.print("[dim]没有历史会话[/dim]")
+            return
+
+        selected_idx = 0
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        def build_table() -> Table:
+            table = Table(title="最近会话", header_style="bold cyan", show_lines=False)
+            table.add_column("", width=2)
+            table.add_column("会话 ID", style="dim", width=14)
+            table.add_column("后端", width=6)
+            table.add_column("状态", width=6)
+            table.add_column("调用", justify="right")
+            table.add_column("成功率", justify="right")
+            for i, s in enumerate(sessions):
+                sel = "▸" if i == selected_idx else ""
+                style = "bold cyan" if i == selected_idx else "dim"
+                table.add_row(
+                    Text(sel, style="bold cyan"),
+                    Text(s["id"][:12] + "...", style=style),
+                    Text(s["backend"], style=style),
+                    Text(s["status"], style=style),
+                    Text(str(s["total_calls"]), style=style),
+                    Text(s["success_rate"], style=style),
+                )
+            return table
+
+        try:
+            tty.setcbreak(fd)
+            loop = asyncio.get_running_loop()
+
+            with Live(build_table(), console=self.console, refresh_per_second=10) as live:
+                while True:
+                    ch = await loop.run_in_executor(None, os.read, fd, 3)
+
+                    if ch == b"q" or ch == b"\x03":
+                        self.console.print("[dim]已取消[/dim]")
+                        return
+
+                    if ch in (b"\r", b"\n"):
+                        break
+
+                    if ch == b"\x1b[A":
+                        selected_idx = (selected_idx - 1) % n
+                        live.update(build_table())
+                    elif ch == b"\x1b[B":
+                        selected_idx = (selected_idx + 1) % n
+                        live.update(build_table())
+
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        # Restore the selected session
+        try:
+            selected = self.db.get_session(sessions[selected_idx]["id"])
+            if selected:
+                result = self.slash._build_resume_result(selected)
+                if result.action == "resume_session":
+                    self._restore_session(result.message)
+                else:
+                    self.console.print(f"[yellow]{result.message}[/yellow]")
+            else:
+                self.console.print("[red]会话不存在[/red]")
+        except Exception as e:
+            self.console.print(f"[red]恢复失败: {e}[/red]")
+
     def _restore_session(self, msg: str):
         """Restore agent context from a checkpoint."""
         try:
@@ -800,6 +960,270 @@ class RobocodeApp:
                 )
         except Exception:
             pass
+
+    async def _prompt_annotation_after_task(self, pending_count: int):
+        """Prompt user to annotate after LLM finishes a task."""
+        self.console.print(
+            f"\n[dim]任务完成。标注本轮 {pending_count} 个操作？"
+            f"[[green]Y[/green]/n/[[green]Enter[/green]][/dim] "
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            ch = await loop.run_in_executor(None, sys.stdin.read, 1)
+            if ch.lower() in ("y", "\n", "\r"):
+                await self._run_annotation_panel()
+            else:
+                self.console.print("[dim]跳过标注（稍后可用 /done 标注）[/dim]")
+        except Exception:
+            pass
+
+    async def _run_annotation_panel(self):
+        """Launch annotation panel for pending tool calls."""
+        from robocode.cli.annotation_panel import AnnotationPanel
+
+        panel = AnnotationPanel(
+            self.annotation_collector,
+            console=self.console,
+            experience_reader=self.experience_reader,
+        )
+        results = await panel.run()
+
+        if results:
+            failures = AnnotationPanel.get_failure_summary(results)
+            if failures:
+                for f in failures:
+                    self.agent.inject_failure_annotation(
+                        f["tool_name"],
+                        [f["failed_dimensions"]],
+                    )
+                self.console.print(
+                    f"[yellow]⚠ {len(failures)} 个操作标注为失败，反馈已注入会话[/yellow]"
+                )
+            total = len(results)
+            self.console.print(f"[green]✅ {total} 条已标注[/green]")
+            # Auto-trigger experience generation after annotation
+            await self._run_exp_manage()
+            # Update experience confidence based on annotation feedback
+            await self._apply_confidence_feedback(results)
+
+    async def _apply_confidence_feedback(self, results):
+        """Update experience confidence based on annotation results.
+
+        Success raises confidence of experiences in the same category by +0.03.
+        Failure lowers confidence by -0.05.
+        """
+        from robocode.agent.experience_manager import ExperienceManager
+
+        if not self.experience_reader or not self.experience_reader.has_experiences():
+            return
+
+        mgr = ExperienceManager(db=self.db, session_id=self._session_id)
+        visible = self.experience_reader.get_visible_experiences()
+
+        # Group results by category: failure -> -0.05, success -> +0.03
+        cat_adj = {}
+        for r in results:
+            cat = r.category
+            if cat not in cat_adj:
+                cat_adj[cat] = 0.0
+            cat_adj[cat] += -0.05 if r.is_failure else 0.03
+
+        updated = 0
+        for exp in visible:
+            exp_cat = exp.get("category", "")
+            if exp_cat not in cat_adj:
+                continue
+            filename = exp.get("filename", "")
+            if not filename:
+                continue
+            delta = min(0.1, max(-0.15, round(cat_adj[exp_cat], 2)))
+            if abs(delta) < 0.01:
+                continue
+            new_conf = max(0.1, min(0.95, exp.get("confidence", 0.5) + delta))
+            mgr.update_experience(
+                exp_cat,
+                filename,
+                frontmatter_updates={"confidence": round(new_conf, 2)},
+            )
+            updated += 1
+
+        if updated:
+            self.console.print(f"[dim]🔄 {updated} 条经验置信度已更新[/dim]")
+
+    async def _run_exp_manage(self):
+        """Run experience manager to analyze data across all sessions and manage experience files.
+
+        Pipeline: rule-based analysis → LLM reflection → merge into experience files.
+        """
+        from robocode.agent.experience_manager import ExperienceManager
+        from robocode.agent.reflector import Reflector, deduplicate_bullets
+        from robocode.agent.experience_filesystem import (
+            EXPERIENCE_ROOT,
+            write_experience,
+            rebuild_index,
+            backup_before_update,
+        )
+
+        mgr = ExperienceManager(db=self.db, session_id="")
+
+        self.console.print("[bold]经验管家运行中...[/bold]")
+
+        # ── Step 1: Rule-based analysis ──
+        physics = mgr.analyze_physics()
+        annotations = mgr.process_annotations()
+        call_flows = mgr.analyze_call_flow()
+
+        has_data = physics or annotations or call_flows
+
+        # ── Step 2: LLM reflection (after rule analysis, before writing) ──
+        bullets: list[str] = []
+        if has_data:
+            try:
+                reflector = Reflector(provider=self.agent.provider, max_bullets=8)
+                bullets = await reflector.reflect(
+                    physics=physics,
+                    annotations=annotations,
+                    call_flows=call_flows,
+                )
+                if bullets:
+                    self.console.print(f"[dim]💡 反思产出 {len(bullets)} 条洞察[/dim]")
+            except Exception:
+                self.console.print("[dim]⚠ LLM 反思失败，跳过反思层[/dim]")
+
+        # ── Step 3: Write experience files (rule results + deduplicated bullets) ──
+
+        if physics:
+            for tool_name, data in physics.items():
+                filename = f"{tool_name}-angle-deviation.md"
+                existing = EXPERIENCE_ROOT / "physics" / filename
+                confidence = min(0.5 + len(data.get("speed_groups", {})) * 0.1, 0.9)
+                data_points = data.get("total_data_points", 0)
+
+                tool_bullets: list[str] | None = None
+                if bullets:
+                    tool_bullets = [
+                        b for b in bullets if tool_name in b or "[PARAM]" in b or "[CAUTION]" in b
+                    ]
+                    if existing.exists():
+                        existing_bullets = ExperienceManager.extract_existing_bullets(existing)
+                        tool_bullets = deduplicate_bullets(tool_bullets, existing_bullets)
+
+                if existing.exists():
+                    existing_fm = mgr._read_frontmatter(existing)
+                    old_conf = existing_fm.get("confidence", confidence)
+                    old_dp = existing_fm.get("data_points", 0)
+                    confidence = round((old_conf + confidence) / 2, 2)
+                    data_points = old_dp + data_points
+                    if not tool_bullets and existing.exists():
+                        tool_bullets = ExperienceManager.extract_existing_bullets(existing)
+
+                fm, body = mgr.create_experience(
+                    category="physics",
+                    domain="angle-deviation",
+                    title=f"{tool_name} 角度偏差分析",
+                    data={tool_name: data},
+                    confidence=confidence,
+                    data_points=data_points,
+                    bullets=tool_bullets,
+                )
+                backup_before_update("physics", filename)
+                write_experience("physics", filename, fm, body)
+                self.db.insert_experience_log(
+                    "experience_created" if not existing.exists() else "experience_updated",
+                    file_path=f"physics/{filename}",
+                    details={
+                        "confidence": confidence,
+                        "data_points": data_points,
+                        "bullets": len(tool_bullets or []),
+                    },
+                )
+                marker = "[yellow]~[/yellow]" if existing.exists() else "[green]+[/green]"
+                self.console.print(f"  {marker} physics/{filename}")
+
+        if annotations:
+            for category, cat_data in annotations.items():
+                if not cat_data.get("failures") and not cat_data.get("successes"):
+                    continue
+                filename = f"{category}-experience.md"
+                existing = EXPERIENCE_ROOT / category / filename
+                confidence = 0.6
+                data_points = cat_data.get("total", 0)
+
+                cat_bullets: list[str] | None = None
+                if bullets:
+                    cat_bullets = [
+                        b
+                        for b in bullets
+                        if f"[{category}]" in b.lower()
+                        or "[PATTERN]" in b
+                        or "[CAUTION]" in b
+                        or "[L1]" in b
+                        or "[L2]" in b
+                    ]
+                    if existing.exists():
+                        existing_bullets = ExperienceManager.extract_existing_bullets(existing)
+                        cat_bullets = deduplicate_bullets(cat_bullets, existing_bullets)
+
+                if existing.exists():
+                    existing_fm = mgr._read_frontmatter(existing)
+                    confidence = round((existing_fm.get("confidence", 0.6) + confidence) / 2, 2)
+                    data_points = existing_fm.get("data_points", 0) + data_points
+                    if not cat_bullets and existing.exists():
+                        cat_bullets = ExperienceManager.extract_existing_bullets(existing)
+
+                fm, body = mgr.create_experience(
+                    category=category,
+                    domain=f"{category}-best-practices",
+                    title=f"{category} 操作经验",
+                    data=None,
+                    confidence=confidence,
+                    data_points=data_points,
+                    annotations={category: cat_data},
+                    call_flows=call_flows,
+                    bullets=cat_bullets,
+                )
+                backup_before_update(category, filename)
+                write_experience(category, filename, fm, body)
+                self.db.insert_experience_log(
+                    "experience_created" if not existing.exists() else "experience_updated",
+                    file_path=f"{category}/{filename}",
+                    details={
+                        "confidence": confidence,
+                        "data_points": data_points,
+                        "bullets": len(cat_bullets or []),
+                    },
+                )
+                marker = "[yellow]~[/yellow]" if existing.exists() else "[green]+[/green]"
+                self.console.print(f"  {marker} {category}/{filename}")
+
+        # Merge similar experiences and prune stale ones
+        merged = mgr.merge_experiences()
+        if merged:
+            self.console.print(f"[dim]🔄 {merged} 组经验已合并[/dim]")
+        pruned = mgr.prune_experiences()
+        if pruned:
+            self.console.print(f"[dim]🗑 {pruned} 条低置信度经验已归档[/dim]")
+
+        rebuild_index()
+        if has_data:
+            self.db.mark_physics_processed()
+            self.db.mark_annotations_processed()
+        self.console.print("[green]✅ 经验整理完成[/green]")
+
+    async def _handle_exit_with_annotations(self, unannotated: int):
+        """Prompt user to annotate before exit. Always runs experience manager."""
+        self.console.print(f"\n[yellow]有 {unannotated} 条未标注操作，现在标注？[Y/n][/yellow]")
+        loop = asyncio.get_running_loop()
+        try:
+            ch = await loop.run_in_executor(None, sys.stdin.read, 1)
+            if ch.lower() == "y":
+                await self._run_annotation_panel()
+            else:
+                # Still run experience manager on exit
+                await self._run_exp_manage()
+        except Exception:
+            pass
+        self._running = False
 
     def _get_voice_status_text(self) -> str:
         state = self._voice.state
