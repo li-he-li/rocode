@@ -1,5 +1,5 @@
 ---
-updated: 2026-05-19
+updated: 2026-05-20
 ---
 
 # Robocode 开发索引
@@ -14,8 +14,9 @@ updated: 2026-05-19
 | monitorable-robust-analytics | ✅ 完成 | 88% (~57/65) |
 | 6D 标定 | ✅ 可用 | 4 脚本 + skill.md |
 | 6D 抓取 (run_grasp.py) | ✅ 可用 | VLM → GraspNet → IK 全链路 |
-| experience-evolution-system | ✅ 完成 | 95% (76/80) — 死代码已清理，管道已验证 |
+| experience-evolution-system | ✅ 完成 | 95% (76/80) → P0×4 + P1×3 修复，85 tests 全绿 |
 | experience-evolution-v2-reflector | ✅ 完成 | LLM 反思层融入 + 可读性改进，57 tests |
+| 经验进化 v3 — LLM 驱动合并 | ✅ 完成 | Reflector prompt 重写 + 扁平化 + 硬件注入 + sandbox 放宽 |
 | 全量测试 | ⚠️ 阻塞 | FakeProvider 缺失，测试套件无法运行 |
 
 ## 模块地图
@@ -28,7 +29,11 @@ robocode/
 │   └── voice.py   # VoiceController（faster-whisper + webrtcvad）
 ├── agent/         # ReAct Agent
 │   ├── core.py    # AgentLoop + SYSTEM_PROMPT + tool 执行
-│   └── context.py # ContextMemory（消息管理 + checkpoint 序列化）
+│   ├── context.py # ContextMemory（消息管理 + checkpoint 序列化）
+│   ├── reflector.py         # LLM 反思器（经验 bullets 产出）
+│   ├── experience_manager.py # 规则层分析（physics/annotations/call_flows）
+│   ├── experience_filesystem.py # 扁平文件存储（无分类）
+│   └── experience_reader.py  # 经验索引读取 → 注入 SYSTEM_PROMPT
 ├── llm/           # LLM Provider
 │   ├── base.py    # LLMProvider 抽象 + StreamEvent
 │   └── deepseek_provider.py  # DeepSeek V4 via AsyncOpenAI
@@ -37,7 +42,7 @@ robocode/
 │   ├── motion_tools.py  # 机械臂运动（L1/L2）
 │   ├── gripper_tools.py # 夹爪控制（L1/L2）
 │   ├── exec_tools.py    # execute_command（L1，受限 shell）
-│   ├── codegen_tools.py # 代码沙箱生成执行（L2）
+│   ├── codegen_tools.py # 代码沙箱生成执行（L2，write_text 已放开）
 │   ├── code_tools.py    # read_file + search_code（L0 只读）
 │   ├── patch_tools.py   # apply_patch + run_checks（L1）
 │   ├── wrapper_tools.py # 工具模板生成（L0）
@@ -60,6 +65,13 @@ robocode/
 └── utils/
     ├── models.py  # 数据模型
     └── cleanup.py # 启动时自动清理
+experience/
+├── code-experience.md          # 关节耦合规律 + move_robot_xyz 陷阱
+├── vlm-desktop-detection.md    # VLM 桌面检测完整成功路径
+├── hardware/episode1-spec.md   # URDF 硬件参数（关节限位/零位/连杆/工作空间）
+├── index.md                    # 经验索引（标题 + 前 3 条 bullets 摘要）
+├── _archive/                   # 归档（合并/淘汰的旧版本）
+└── _history/                   # 备份（更新前自动备份）
 ```
 
 ## 按标签索引
@@ -78,6 +90,8 @@ robocode/
 | `session-management` `ttl` `resume` | [changelog/05-15](01-changelog/2026-05-15.md) |
 | `review` `audit` `robustness` `gates` | [reviews/05-15](04-reviews/2026-05-15.md) [reviews/05-19](04-reviews/2026-05-19.md) |
 | `gatekeeper` `full-review` `reflector` `P0` | [reviews/05-19](04-reviews/2026-05-19.md) |
+| `experience-evolution` `bugfix` `data-flow` `P0` `P1` | [changelog/05-20](01-changelog/2026-05-20.md) [tests/05-20](03-tests/2026-05-20.md) |
+| `reflector-prompt` `flat` `hardware` `sandbox` `llm-merge` | [changelog/05-20](01-changelog/2026-05-20.md) |
 
 ## 时间线
 
@@ -96,6 +110,8 @@ robocode/
 | 2026-05-15 | **死代码清理 + 会话管理**：6d_grasp physics 双写修复、experience_pending 队列删除、会话 7 天 TTL + 空会话清理、/resume 箭头选择 |
 | 2026-05-19 | **经验进化 v2 — Reflector 融入**：LLM 反思层 + 索引可读性改进 + 建议/反思合并 + P0/P1 修复，57 tests |
 | 2026-05-19 | **Gatekeeper 全量审查**：feature/experience-evolution-system 分支 30+ 文件审查，发现 P0×2 / P1×5 / P2×2 |
+| 2026-05-20 | **经验进化系统全链路修复**：审查发现 P0×4（analyze_conversation 缺失/解析器失效/签名崩溃/feed_text 丢失）+ P1×3，85 tests 全绿 |
+| 2026-05-20 | **经验进化 v3 — LLM 驱动合并**：Reflector prompt 重写（因果优先+自由标签+多场景示例）+ 扁平化分类 + 硬件描述注入 + sandbox 放宽 write_text + LLM 决定合并目标 + confidence 只升不降 |
 
 ## 已知问题 / 待办
 
@@ -106,7 +122,5 @@ robocode/
 - **P1-4**: SafetyPolicy.check_speed() 负值通过校验
 - voice-stt: 3 个任务待完成（手动测试 + gatekeeper）
 - monitorable-analytics: 8 个验证任务待完成
-- experience-evolution: 4 个验证任务 + commit 待完成
-- experience-evolution-v2: 整个 change 应归档（与 v1 重复）
 - run_grasp.py: IK/通信失败不区分（增强需求，非阻塞）
-- P0-4: ctypes.PyThreadState_SetAsyncExc 线程中断标记待处理
+- ctypes 线程中断标记：P0-4 已标记，待处理
