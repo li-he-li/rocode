@@ -28,7 +28,7 @@ class DeepSeekProvider(LLMProvider):
             "model": self.settings.provider.model,
             "messages": [{"role": "system", "content": system}] + messages,
             "stream": True,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
         }
         if not self.settings.provider.thinking_enabled:
             params["extra_body"] = {"thinking": {"type": "disabled"}}

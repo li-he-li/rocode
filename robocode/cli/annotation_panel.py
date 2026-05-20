@@ -1,162 +1,184 @@
-"""Annotation panel UI — rich Panel rendering + raw stdin Y/N/Q input."""
+"""Annotation panel UI — summary view, single feedback text for all pending items."""
 
 import sys
 import asyncio
+import termios
+import os
 from rich.console import Console
 from rich.panel import Panel
 from robocode.agent.annotation import (
-    ANNOTATION_SCHEMA,
-    FAILURE_RULES,
     AnnotationResult,
 )
 
+_FAILURE_KEYWORDS = [
+    "失败",
+    "错误",
+    "偏差",
+    "偏了",
+    "偏移",
+    "振动",
+    "抖动",
+    "碰撞",
+    "掉落",
+    "没抓到",
+    "抓空",
+    "异常",
+    "超限",
+    "不到位",
+    "不准确",
+    "不平稳",
+    "噪音",
+    "卡顿",
+    "超时",
+    "报错",
+    "失控",
+    "撞",
+    "停不下来",
+    "太快",
+    "太慢",
+    "不动",
+    "没反应",
+]
+
+
+def _detect_failure(text: str) -> bool:
+    lower = text.lower()
+    for kw in _FAILURE_KEYWORDS:
+        idx = lower.find(kw)
+        if idx == -1:
+            continue
+        prefix = lower[max(0, idx - 1) : idx]
+        if prefix in ("不", "没", "无", "非"):
+            continue
+        return True
+    return False
+
+
+async def _read_multiline_tty() -> str:
+    """Read multi-line text from /dev/tty. Empty line (double Enter) to finish."""
+    loop = asyncio.get_running_loop()
+    for path in ("/dev/tty", "/dev/stdin"):
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except (OSError, IOError):
+            continue
+        try:
+            old = termios.tcgetattr(fd)
+            new = termios.tcgetattr(fd)
+            new[3] |= termios.ICANON | termios.ECHO | termios.IEXTEN
+            termios.tcsetattr(fd, termios.TCSADRAIN, new)
+            try:
+                lines: list[str] = []
+                with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as f:
+                    first = (await loop.run_in_executor(None, f.readline)).rstrip("\n\r")
+                    if not first:
+                        return ""
+                    lines.append(first)
+                    while True:
+                        line = (await loop.run_in_executor(None, f.readline)).rstrip("\n\r")
+                        if not line:
+                            break
+                        lines.append(line)
+                return "\n".join(lines)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                os.close(fd)
+        except (OSError, IOError, EOFError):
+            os.close(fd)
+            continue
+    return ""
+
 
 class AnnotationPanel:
-    """Interactive annotation panel using raw stdin (Y/N/Q).
-
-    Reuses the same raw-stdin pattern as _owner_approval_callback.
-    """
+    """Summary annotation — shows all pending tool calls, asks for one feedback."""
 
     def __init__(self, collector, console: Console | None = None, experience_reader=None):
         self._collector = collector
         self._console = console or Console()
         self._experience_reader = experience_reader
 
-    async def run(self) -> list[AnnotationResult]:
-        """Run annotation panel for all pending tool calls.
+    async def run(self) -> tuple[list[AnnotationResult], str]:
+        """Collect feedback. Returns (results, free_text).
 
-        Returns list of completed AnnotationResults.
+        If there are pending tool calls, annotates them all with the same
+        feedback. If none, still collects free-text feedback for the session.
         """
         pending = self._collector.get_pending()
+
+        # ── Show header ────────────────────────────────────────────
+        if pending:
+            item_lines = [
+                f"  [{i + 1}] [bold]{p['tool_name']}[/bold]  "
+                f"({self._collector.get_category(p['tool_name'])})"
+                for i, p in enumerate(pending)
+            ]
+            self._console.print(
+                Panel(
+                    f"[bold]本轮共 {len(pending)} 个操作[/bold]\n\n"
+                    + "\n".join(item_lines)
+                    + "\n\n请一次总结所有操作的效果。",
+                    border_style="blue",
+                )
+            )
+        else:
+            self._console.print(
+                Panel(
+                    "[bold]本轮为纯对话，无工具操作[/bold]\n\n可以输入任何反馈、建议、经验总结。",
+                    border_style="blue",
+                )
+            )
+
+        # ── Read multi-line feedback ────────────────────────────────
+        prompt = "请描述（多行输入，空行结束）:" if pending else "请输入（多行输入，空行结束）:"
+        self._console.print(f"\n[bold cyan]{prompt}[/bold cyan]")
+        sys.stdout.write("> ")
+        sys.stdout.flush()
+
+        text = (await self._read_input_line()).strip()
+
+        if text.upper() == "Q" or not text:
+            if pending:
+                for p in pending:
+                    self._collector.skip(p["tool_call_id"])
+            self._console.print("[dim]已跳过[/dim]")
+            return [], ""
+
+        self._console.print(f"  → [green]{text}[/green]")
+
+        # ── No pending items: return raw text only ──────────────────
         if not pending:
-            self._console.print("[dim]本轮无待标注项[/dim]")
-            return []
+            return [], text
+
+        # ── Has pending items: annotate all with same feedback ──────
+        is_failure = _detect_failure(text)
+        if is_failure:
+            self._console.print("  [yellow]⚠ 检测到问题关键词，标记为失败[/yellow]")
+        else:
+            self._console.print("  [green]✓ 标记为成功[/green]")
 
         results: list[AnnotationResult] = []
         for item in pending:
-            tool_call_id = item["tool_call_id"]
-            tool_name = item["tool_name"]
-            params = item.get("params", {})
-            category = self._collector.get_category(tool_name)
+            result = AnnotationResult(
+                tool_call_id=item["tool_call_id"],
+                tool_name=item["tool_name"],
+                category=self._collector.get_category(item["tool_name"]),
+                choices={},
+                is_failure=is_failure,
+                free_text=text,
+            )
+            results.append(result)
+            self._collector.collect(
+                tool_call_id=item["tool_call_id"],
+                category=result.category,
+                choices=result.choices,
+                is_failure=result.is_failure,
+                free_text=result.free_text,
+            )
 
-            result = await self._annotate_one(tool_call_id, tool_name, category, params)
-            if result is not None:
-                results.append(result)
-                self._collector.collect(
-                    tool_call_id=tool_call_id,
-                    category=result.category,
-                    choices=result.choices,
-                    is_failure=result.is_failure,
-                    free_text=result.free_text,
-                )
-            else:
-                self._collector.skip(tool_call_id)
+        return results, text
 
-        return results
-
-    async def _annotate_one(
-        self, tool_call_id: int, tool_name: str, category: str, params: dict
-    ) -> AnnotationResult | None:
-        """Annotate a single tool call. Returns None if user skips."""
-        schema = ANNOTATION_SCHEMA.get(category, ANNOTATION_SCHEMA["general"])
-        dims = list(schema.keys())
-        if not dims:
-            return None
-
-        choices = {}
-        self._show_header(tool_name, category, params)
-
-        for dim_name in dims:
-            options = schema[dim_name]
-            choice = await self._ask_dimension(dim_name, options)
-            if choice == "Q":
-                # Skip all remaining
-                return None
-            elif choice == "N":
-                # Skip this dimension, leave unset
-                continue
-            else:
-                choices[dim_name] = choice
-
-        if not choices:
-            return None
-
-        is_failure = FAILURE_RULES.is_failure(category, choices)
-        free_text = await self._ask_free_text()
-
-        return AnnotationResult(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            category=category,
-            choices=choices,
-            is_failure=is_failure,
-            free_text=free_text,
-        )
-
-    def _show_header(self, tool_name: str, category: str, params: dict):
-        param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else "(无参数)"
-        body = f"[bold]{tool_name}[/bold]  [{category}]\n参数: {param_str}"
-
-        # Show related experience hints if available
-        if self._experience_reader and self._experience_reader.has_experiences():
-            visible = self._experience_reader.get_visible_experiences()
-            related = [e for e in visible if e.get("category") == category]
-            if related:
-                body += "\n\n[dim]相关经验:[/dim]"
-                for e in related[:3]:
-                    body += f"\n[dim]  - {e.get('category')}/{e.get('filename')} (confidence={e.get('confidence', 0):.0%})[/dim]"
-
-        self._console.print(Panel(body, border_style="blue"))
-
-    async def _ask_dimension(self, dim_name: str, options: list[str]) -> str:
-        """Show dimension options, return selected value or N/Q."""
-        opts_str = "  ".join(f"[{i}] {o}" for i, o in enumerate(options))
-        self._console.print(f"\n[bold yellow]{dim_name}?[/bold yellow]")
-        self._console.print(f"  {opts_str}")
-        self._console.print("  [N] 跳过  [Q] 跳过全部剩余", style="dim")
-
-        while True:
-            ch = await self._read_char()
-            if ch is None:
-                continue
-            cl = ch.lower()
-            if cl in ("n", "q"):
-                return cl.upper()
-            if cl.isdigit():
-                idx = int(cl)
-                if 0 <= idx < len(options):
-                    self._console.print(f"  → [green]{options[idx]}[/green]")
-                    return options[idx]
-
-    async def _ask_free_text(self) -> str:
-        """Optional free text input. Enter to skip."""
-        self._console.print("\n[bold yellow]补充说明?[/bold yellow] [dim](Enter 跳过)[/dim]")
-        try:
-            loop = asyncio.get_running_loop()
-            chars = []
-            while True:
-                ch = await loop.run_in_executor(None, sys.stdin.read, 1)
-                if ch == "\n":
-                    text = "".join(chars).strip()
-                    if text:
-                        self._console.print(f"  → [green]{text}[/green]")
-                    return text
-                elif ch == "\x1b":
-                    return ""
-                elif ch and len(ch) == 1:
-                    sys.stdout.write(ch)
-                    sys.stdout.flush()
-                    chars.append(ch)
-        except Exception:
-            return ""
-
-    async def _read_char(self) -> str | None:
-        """Read a single character from stdin."""
-        try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, sys.stdin.read, 1)
-        except Exception:
-            return None
+    async def _read_input_line(self) -> str:
+        return await _read_multiline_tty()
 
     @staticmethod
     def get_failure_summary(results: list[AnnotationResult]) -> list[dict]:
@@ -164,18 +186,10 @@ class AnnotationPanel:
         failures = []
         for r in results:
             if r.is_failure:
-                failed_dims = {
-                    dim: val
-                    for dim, val in r.choices.items()
-                    if val
-                    not in ("成功", "正确", "准确", "平稳", "无异常", "合适", "无", "部分成功")
-                }
                 failures.append(
                     {
                         "tool_name": r.tool_name,
-                        "failed_dimensions": ", ".join(
-                            f"{dim}={val}" for dim, val in failed_dims.items()
-                        ),
+                        "failed_dimensions": r.free_text,
                     }
                 )
         return failures

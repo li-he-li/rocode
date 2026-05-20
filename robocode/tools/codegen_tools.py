@@ -25,8 +25,6 @@ FORBIDDEN_PATTERNS = [
     r"open\([^)]*['\"][wa]",
     r"open\([^)]*mode\s*=\s*['\"][wa]",
     r"ctypes\.",
-    r"\.write_text\(",
-    r"\.write_bytes\(",
     r"io\.open\(",
     r"builtins\.open\(",
     r"compile\s*\(\s*[^,]+,\s*[^,]+,\s*['\"]exec",
@@ -42,6 +40,10 @@ FORBIDDEN_PATTERNS = [
     r"\bgetattr\b.*\.__class__",
     r"type\s*\(\s*__",
 ]
+
+# File write operations are ALLOWED (needed for writing scripts to /tmp).
+# Protection is enforced by the clean_env whitelist and resource limits,
+# not by blocking write APIs.
 
 
 class CodeSandbox:

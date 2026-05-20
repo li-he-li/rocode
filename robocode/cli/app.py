@@ -48,6 +48,40 @@ from robocode.services.analytics.resource_tracker import ResourceTracker
 PROMPT_STYLE = Style.from_dict({"prompt": "#00ff00 bold"})
 
 
+def _merge_bullets_replace(
+    existing: list[str], new: list[str], threshold: float = 0.55
+) -> list[str]:
+    """Merge new bullets into existing, replacing similar ones.
+
+    For each new bullet, find the most similar existing bullet.
+    If similarity > threshold, the new REPLACES the old (prevents contradictory
+    rules from coexisting). Otherwise the new is appended.
+    """
+    import difflib
+
+    replaced = set()
+    merged = list(existing)
+
+    for nb in new:
+        best_idx = -1
+        best_ratio = 0.0
+        for i, eb in enumerate(merged):
+            if i in replaced:
+                continue
+            ratio = difflib.SequenceMatcher(None, nb, eb).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_idx = i
+
+        if best_ratio > threshold and best_idx >= 0:
+            merged[best_idx] = nb
+            replaced.add(best_idx)
+        else:
+            merged.append(nb)
+
+    return merged
+
+
 class RobocodeApp:
     def __init__(self, fake: bool = False):
         self.console = Console()
@@ -978,7 +1012,7 @@ class RobocodeApp:
             pass
 
     async def _run_annotation_panel(self):
-        """Launch annotation panel for pending tool calls."""
+        """Launch annotation panel. Works for both tool calls and chat-only sessions."""
         from robocode.cli.annotation_panel import AnnotationPanel
 
         panel = AnnotationPanel(
@@ -986,7 +1020,7 @@ class RobocodeApp:
             console=self.console,
             experience_reader=self.experience_reader,
         )
-        results = await panel.run()
+        results, chat_feedback = await panel.run()
 
         if results:
             failures = AnnotationPanel.get_failure_summary(results)
@@ -1005,6 +1039,11 @@ class RobocodeApp:
             await self._run_exp_manage()
             # Update experience confidence based on annotation feedback
             await self._apply_confidence_feedback(results)
+        elif chat_feedback:
+            # Chat-only feedback: store it so _run_exp_manage can use it
+            self._chat_feedback = chat_feedback
+            self.console.print("[green]✅ 反馈已记录[/green]")
+            await self._run_exp_manage()
 
     async def _apply_confidence_feedback(self, results):
         """Update experience confidence based on annotation results.
@@ -1051,9 +1090,9 @@ class RobocodeApp:
             self.console.print(f"[dim]🔄 {updated} 条经验置信度已更新[/dim]")
 
     async def _run_exp_manage(self):
-        """Run experience manager to analyze data across all sessions and manage experience files.
+        """Run experience manager: LLM reflection → single unified experience file per session.
 
-        Pipeline: rule-based analysis → LLM reflection → merge into experience files.
+        Pipeline: collect data → LLM reflect → write ONE file per session (not per category).
         """
         from robocode.agent.experience_manager import ExperienceManager
         from robocode.agent.reflector import Reflector, deduplicate_bullets
@@ -1062,141 +1101,240 @@ class RobocodeApp:
             write_experience,
             rebuild_index,
             backup_before_update,
+            _category_from_filename,
         )
 
-        mgr = ExperienceManager(db=self.db, session_id="")
+        mgr = ExperienceManager(db=self.db, session_id=self._session_id)
 
         self.console.print("[bold]经验管家运行中...[/bold]")
 
-        # ── Step 1: Rule-based analysis ──
+        # ── Step 1: Collect raw data ──
+        transcript = self.agent.get_conversation_transcript()
         physics = mgr.analyze_physics()
         annotations = mgr.process_annotations()
         call_flows = mgr.analyze_call_flow()
+        conv_analysis = ExperienceManager.analyze_conversation(transcript)
 
-        has_data = physics or annotations or call_flows
+        # Deduplicate feedback (same text annotated on multiple tools)
+        all_feedback: list[str] = []
+        if annotations:
+            for cat_data in annotations.values():
+                for ft in cat_data.get("free_texts", []):
+                    if ft and ft not in all_feedback:
+                        all_feedback.append(ft)
+        # Include chat-only feedback from /done
+        chat_fb = getattr(self, "_chat_feedback", "")
+        if chat_fb and chat_fb not in all_feedback:
+            all_feedback.append(chat_fb)
+        self._chat_feedback = ""  # consumed
+        feedback = " | ".join(all_feedback)
 
-        # ── Step 2: LLM reflection (after rule analysis, before writing) ──
-        bullets: list[str] = []
+        has_data = bool(transcript) or physics or annotations or call_flows or feedback
+
+        # ── Load experience index summary for Reflector context ──
+        index_path = EXPERIENCE_ROOT / "index.md"
+        experience_index = ""
+        if index_path.exists():
+            experience_index = index_path.read_text(encoding="utf-8")
+
+        # ── Step 2: LLM reflection (transcript + physics + annotations + call_flows + index) ──
+        reflector_results: list[dict] = []
         if has_data:
             try:
-                reflector = Reflector(provider=self.agent.provider, max_bullets=8)
-                bullets = await reflector.reflect(
+                reflector = Reflector(provider=self.agent.provider, max_bullets=10)
+                reflector_results = await reflector.reflect(
+                    transcript=transcript,
                     physics=physics,
                     annotations=annotations,
                     call_flows=call_flows,
+                    conv_analysis=conv_analysis,
+                    experience_index=experience_index,
                 )
-                if bullets:
-                    self.console.print(f"[dim]💡 反思产出 {len(bullets)} 条洞察[/dim]")
+                if reflector_results:
+                    self.console.print(f"[dim]💡 反思产出 {len(reflector_results)} 条洞察[/dim]")
             except Exception:
                 self.console.print("[dim]⚠ LLM 反思失败，跳过反思层[/dim]")
 
-        # ── Step 3: Write experience files (rule results + deduplicated bullets) ──
+        # ── Step 3: Process reflector results — respect LLM's merge decisions ──
+        if has_data:
+            import time as _time
 
-        if physics:
-            for tool_name, data in physics.items():
-                filename = f"{tool_name}-angle-deviation.md"
-                existing = EXPERIENCE_ROOT / "physics" / filename
-                confidence = min(0.5 + len(data.get("speed_groups", {})) * 0.1, 0.9)
-                data_points = data.get("total_data_points", 0)
+            date_str = _time.strftime("%Y-%m-%d")
 
-                tool_bullets: list[str] | None = None
-                if bullets:
-                    tool_bullets = [
-                        b for b in bullets if tool_name in b or "[PARAM]" in b or "[CAUTION]" in b
-                    ]
-                    if existing.exists():
-                        existing_bullets = ExperienceManager.extract_existing_bullets(existing)
-                        tool_bullets = deduplicate_bullets(tool_bullets, existing_bullets)
+            # Derive readable filename from first bullet's intent or user feedback
+            def _make_filename(bullets, fb, sid):
+                # Try first bullet's intent
+                for b in bullets:
+                    intent = b.get("intent", "")
+                    if intent:
+                        # 中文意图 → pinyin-free slug: just use the intent as-is for readability
+                        slug = intent.replace(" ", "-").replace("/", "-")
+                        return f"{slug}.md"
+                # Fallback: first 4 words of feedback
+                if fb:
+                    words = fb[:20].replace(" ", "-").replace("，", "").replace("。", "")
+                    return f"{words}.md"
+                sid_short = sid[:8] if sid else "unknown"
+                return f"session-{date_str}-{sid_short}.md"
 
-                if existing.exists():
-                    existing_fm = mgr._read_frontmatter(existing)
-                    old_conf = existing_fm.get("confidence", confidence)
-                    old_dp = existing_fm.get("data_points", 0)
-                    confidence = round((old_conf + confidence) / 2, 2)
-                    data_points = old_dp + data_points
-                    if not tool_bullets and existing.exists():
-                        tool_bullets = ExperienceManager.extract_existing_bullets(existing)
+            filename = _make_filename(reflector_results, feedback, self._session_id)
 
-                fm, body = mgr.create_experience(
-                    category="physics",
-                    domain="angle-deviation",
-                    title=f"{tool_name} 角度偏差分析",
-                    data={tool_name: data},
-                    confidence=confidence,
-                    data_points=data_points,
-                    bullets=tool_bullets,
-                )
-                backup_before_update("physics", filename)
-                write_experience("physics", filename, fm, body)
-                self.db.insert_experience_log(
-                    "experience_created" if not existing.exists() else "experience_updated",
-                    file_path=f"physics/{filename}",
-                    details={
-                        "confidence": confidence,
-                        "data_points": data_points,
-                        "bullets": len(tool_bullets or []),
-                    },
-                )
-                marker = "[yellow]~[/yellow]" if existing.exists() else "[green]+[/green]"
-                self.console.print(f"  {marker} physics/{filename}")
+            data_points = sum(cat_data.get("total", 0) for cat_data in (annotations or {}).values())
+            data_points += sum(d.get("total_data_points", 0) for d in (physics or {}).values())
+            confidence = 0.6
 
-        if annotations:
-            for category, cat_data in annotations.items():
-                if not cat_data.get("failures") and not cat_data.get("successes"):
+            # Build session context body
+            body_parts = [f"# 会话经验 ({date_str})", ""]
+
+            if feedback:
+                body_parts.append("## 用户反馈")
+                body_parts.append("")
+                body_parts.append(feedback[:500])
+                body_parts.append("")
+
+            if physics:
+                body_parts.append("## 物理规律")
+                body_parts.append("")
+                body_parts.extend(mgr._render_physics_data(physics))
+                body_parts.append("")
+                body_parts.append("## 数据支撑")
+                body_parts.append("")
+                body_parts.extend(mgr._render_data_table(physics))
+                body_parts.append("")
+
+            if annotations:
+                body_parts.append("## 标注统计")
+                body_parts.append("")
+                for cat, cat_data in annotations.items():
+                    total = cat_data.get("total", 0)
+                    failures = len(cat_data.get("failures", []))
+                    successes = len(cat_data.get("successes", []))
+                    body_parts.append(f"- {cat}: 总{total} 成功{successes} 失败{failures}")
+                body_parts.append("")
+
+            if call_flows:
+                body_parts.append("## 工具调用模式")
+                body_parts.append("")
+                body_parts.extend(mgr._render_call_flows(call_flows))
+                body_parts.append("")
+
+            if transcript:
+                body_parts.append("## 关键事件（失败+修正路径）")
+                body_parts.append("")
+                seen_fail = set()
+                for msg in transcript:
+                    role = msg.get("role", "")
+                    if role == "tool_result" and not msg.get("success", True):
+                        short = msg.get("message", "")[:80]
+                        if short not in seen_fail:
+                            seen_fail.add(short)
+                            body_parts.append(f"- ❌ {short}")
+                last_success_tools = set()
+                for msg in reversed(transcript):
+                    role = msg.get("role", "")
+                    if role == "tool_call":
+                        tool = msg.get("tool", "")
+                        if tool not in last_success_tools:
+                            last_success_tools.add(tool)
+                            body_parts.append(f"- ✅ {tool} 最终成功")
+                    if len(last_success_tools) >= 5:
+                        break
+                body_parts.append("")
+
+            new_body = "\n".join(body_parts)
+
+            # ── Separate bullets by LLM's decision: update_target vs new ──
+            update_groups: dict[str, list[str]] = {}  # target_file → [bullets]
+            new_bullets: list[str] = []
+
+            for result in reflector_results:
+                raw = result["raw"]
+                target = result.get("update_target")
+                if target:
+                    # LLM specified which file to update
+                    update_groups.setdefault(target, []).append(raw)
+                else:
+                    new_bullets.append(raw)
+
+            # ── Process updates: merge into LLM-specified files ──
+            for target_name, bullets_to_add in update_groups.items():
+                target_path = EXPERIENCE_ROOT / target_name
+                if not target_path.exists():
+                    new_bullets.extend(bullets_to_add)
                     continue
-                filename = f"{category}-experience.md"
-                existing = EXPERIENCE_ROOT / category / filename
-                confidence = 0.6
-                data_points = cat_data.get("total", 0)
 
-                cat_bullets: list[str] | None = None
-                if bullets:
-                    cat_bullets = [
-                        b
-                        for b in bullets
-                        if f"[{category}]" in b.lower()
-                        or "[PATTERN]" in b
-                        or "[CAUTION]" in b
-                        or "[L1]" in b
-                        or "[L2]" in b
-                    ]
-                    if existing.exists():
-                        existing_bullets = ExperienceManager.extract_existing_bullets(existing)
-                        cat_bullets = deduplicate_bullets(cat_bullets, existing_bullets)
+                existing_bullets = ExperienceManager.extract_existing_bullets(target_path)
+                deduped = deduplicate_bullets(bullets_to_add, existing_bullets)
 
-                if existing.exists():
-                    existing_fm = mgr._read_frontmatter(existing)
-                    confidence = round((existing_fm.get("confidence", 0.6) + confidence) / 2, 2)
-                    data_points = existing_fm.get("data_points", 0) + data_points
-                    if not cat_bullets and existing.exists():
-                        cat_bullets = ExperienceManager.extract_existing_bullets(existing)
+                if not deduped:
+                    self.console.print(f"  [dim]⊘ {target_name} 所有内容已存在，跳过[/dim]")
+                    continue
 
-                fm, body = mgr.create_experience(
-                    category=category,
-                    domain=f"{category}-best-practices",
-                    title=f"{category} 操作经验",
-                    data=None,
-                    confidence=confidence,
-                    data_points=data_points,
-                    annotations={category: cat_data},
-                    call_flows=call_flows,
-                    bullets=cat_bullets,
+                merged_bullets = _merge_bullets_replace(existing_bullets, deduped)
+
+                existing_body = mgr._read_body(target_path)
+                body_before_suggestions = existing_body
+                if "## 建议" in existing_body:
+                    body_before_suggestions = existing_body.split("## 建议")[0].rstrip()
+                updated_body = (
+                    body_before_suggestions + "\n\n## 建议\n\n" + "\n".join(merged_bullets)
                 )
-                backup_before_update(category, filename)
-                write_experience(category, filename, fm, body)
+
+                existing_fm = mgr._read_frontmatter(target_path)
+                old_dp = existing_fm.get("data_points", 0)
+                old_conf = existing_fm.get("confidence", 0.5)
+                existing_fm["data_points"] = old_dp + data_points
+                existing_fm["confidence"] = min(round(old_conf + 0.03, 2), 0.95)
+                existing_fm["updated"] = date_str
+
+                # Split category/filename
+                parts = target_name.split("/", 1)
+                cat, fname = (parts[0], parts[1]) if len(parts) == 2 else ("general", parts[0])
+
+                backup_before_update(cat, fname)
+                write_experience(cat, fname, existing_fm, updated_body)
                 self.db.insert_experience_log(
-                    "experience_created" if not existing.exists() else "experience_updated",
-                    file_path=f"{category}/{filename}",
+                    "experience_updated",
+                    file_path=target_name,
+                    details={
+                        "confidence": existing_fm["confidence"],
+                        "data_points": existing_fm["data_points"],
+                        "new_bullets": len(deduped),
+                        "source": "llm_update_target",
+                    },
+                )
+                self.console.print(f"  [cyan]⊕[/cyan] {target_name} (更新 {len(deduped)} 条)")
+
+            # ── Process new bullets: create new file ──
+            if new_bullets:
+                new_body += "## 建议\n\n" + "\n".join(new_bullets) + "\n"
+
+                frontmatter = {
+                    "type": "operational",
+                    "tags": [],
+                    "confidence": confidence,
+                    "data_points": data_points,
+                    "sources": self._session_id,
+                    "created": date_str,
+                    "updated": date_str,
+                }
+
+                cat = _category_from_filename(filename)
+                write_experience(cat, filename, frontmatter, new_body)
+                self.db.insert_experience_log(
+                    "experience_created",
+                    file_path=f"{cat}/{filename}",
                     details={
                         "confidence": confidence,
                         "data_points": data_points,
-                        "bullets": len(cat_bullets or []),
+                        "bullets": len(new_bullets),
                     },
                 )
-                marker = "[yellow]~[/yellow]" if existing.exists() else "[green]+[/green]"
-                self.console.print(f"  {marker} {category}/{filename}")
+                self.console.print(
+                    f"  [green]+[/green] {cat}/{filename} ({len(new_bullets)} 条新洞察)"
+                )
 
-        # Merge similar experiences and prune stale ones
+        # ── Step 4: Merge similar + prune stale ──
         merged = mgr.merge_experiences()
         if merged:
             self.console.print(f"[dim]🔄 {merged} 组经验已合并[/dim]")
@@ -1208,7 +1346,10 @@ class RobocodeApp:
         if has_data:
             self.db.mark_physics_processed()
             self.db.mark_annotations_processed()
-        self.console.print("[green]✅ 经验整理完成[/green]")
+        # Reload experience reader so current session sees new experiences
+        self.experience_reader = ExperienceReader()
+        self.agent._system_prompt = self.agent._build_system_prompt()
+        self.console.print("[green]✅ 经验整理完成（已同步到当前会话）[/green]")
 
     async def _handle_exit_with_annotations(self, unannotated: int):
         """Prompt user to annotate before exit. Always runs experience manager."""
