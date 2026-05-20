@@ -1,11 +1,9 @@
-"""Annotation system — human feedback on tool execution quality."""
+"""Annotation system — one free-text feedback per session, applied to all pending tool calls."""
 
 from dataclasses import dataclass, field
 from robocode.services.analytics.logger import get_logger
 
 logger = get_logger("annotation")
-
-# ── Tool → category mapping ──────────────────────────────────────────
 
 TOOL_CATEGORIES = {
     "move_robot_xyz": "motion",
@@ -19,58 +17,6 @@ TOOL_CATEGORIES = {
     "execute_command": "code",
     "run_script": "script",
 }
-
-# ── Annotation dimensions per category ────────────────────────────────
-
-ANNOTATION_SCHEMA = {
-    "motion": {
-        "motion_quality": ["平稳", "轻微振动", "严重振动", "异常噪音"],
-        "position_accuracy": ["准确", "轻微偏差", "明显偏差"],
-    },
-    "gripper": {
-        "grasp_result": ["成功", "未抓取", "抓空", "物体掉落"],
-        "gripper_force": ["合适", "过大", "过小"],
-    },
-    "grasp": {
-        "grasp_result": ["成功", "失败", "未命中", "碰撞"],
-        "overall": ["成功", "失败"],
-    },
-    "code": {
-        "correctness": ["正确", "有偏差", "错误"],
-        "side_effects": ["无异常", "有异常", "有副作用"],
-    },
-    "script": {
-        "execution_result": ["成功", "部分成功", "失败"],
-        "anomaly": ["无", "有异常"],
-    },
-    "general": {
-        "result": ["成功", "失败"],
-    },
-}
-
-# ── Failure detection rules ───────────────────────────────────────────
-
-_FAILURE_INDICATORS = {
-    "motion": ["严重振动", "异常噪音", "明显偏差"],
-    "gripper": ["未抓取", "抓空", "物体掉落", "过小"],
-    "grasp": ["失败", "未命中", "碰撞"],
-    "code": ["错误", "有副作用"],
-    "script": ["失败", "有异常"],
-}
-
-
-class FailureRules:
-    """Detects failure based on annotation choices."""
-
-    @staticmethod
-    def is_failure(category: str, choices: dict) -> bool:
-        indicators = _FAILURE_INDICATORS.get(category, [])
-        return any(choices.get(dim, "") in indicators for dim, value in choices.items())
-
-
-FAILURE_RULES = FailureRules()
-
-# ── Annotation result ─────────────────────────────────────────────────
 
 
 @dataclass
@@ -93,16 +39,13 @@ class AnnotationResult:
         }
 
 
-# ── Annotation collector ──────────────────────────────────────────────
-
-
 class AnnotationCollector:
     """Collects pending annotations and persists them to DB."""
 
     def __init__(self, db, session_id: str = ""):
         self._db = db
         self._session_id = session_id
-        self._pending: dict[int, dict] = {}  # tool_call_id → {tool_name, params}
+        self._pending: dict[int, dict] = {}
 
     def register_tool_call(self, tool_call_id: int, tool_name: str, params: dict):
         if tool_call_id and tool_call_id > 0:
@@ -127,7 +70,7 @@ class AnnotationCollector:
         choices: dict,
         is_failure: bool,
         free_text: str = "",
-    ) -> AnnotationResult | None:
+    ) -> "AnnotationResult | None":
         if tool_call_id not in self._pending:
             return None
 
@@ -154,13 +97,6 @@ class AnnotationCollector:
                 logger.exception("annotation_db_write_failed")
 
         self._pending.pop(tool_call_id, None)
-
-        logger.info(
-            "annotation_completed",
-            tool_count=1,
-            annotated_count=1 if result else 0,
-            failure_count=1 if is_failure else 0,
-        )
         return result
 
     def skip(self, tool_call_id: int):

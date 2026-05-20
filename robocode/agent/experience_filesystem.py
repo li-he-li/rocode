@@ -1,7 +1,8 @@
 """Experience filesystem — write, backup, archive, and index experience files.
 
-Experience files are Markdown + YAML frontmatter, stored under robocode/experience/.
-Operations are protected: update backs up current version, archive never deletes.
+Structure: experience/<category>/<filename>.md
+Category is derived from filename prefix (e.g. "code-experience.md" → "code/")
+or explicitly passed.
 """
 
 import re
@@ -14,15 +15,40 @@ logger = get_logger("experience_filesystem")
 
 EXPERIENCE_ROOT = Path(__file__).resolve().parent.parent / "experience"
 
-CATEGORIES = ["physics", "motion", "gripper", "grasp", "code", "script", "general"]
+# Known categories — used for rebuild_index scanning
+CATEGORIES = [
+    "physics",
+    "code",
+    "vlm",
+    "motion",
+    "gripper",
+    "grasp",
+    "hardware",
+    "session",
+    "general",
+]
 
 
-def _validate_path_component(name: str, *, allow_empty: bool = False) -> None:
-    """Reject path traversal characters in category or filename components."""
-    if not allow_empty and not name:
-        raise ValueError("path component must not be empty")
-    if ".." in name or "/" in name or "\\" in name:
-        raise ValueError(f"Invalid path component: {name!r}")
+def _validate_path(category: str, filename: str) -> None:
+    """Reject path traversal in category/filename."""
+    for name in (category, filename):
+        if not name:
+            raise ValueError("must not be empty")
+        if ".." in name or "/" in name or "\\" in name:
+            raise ValueError(f"Invalid path component: {name!r}")
+
+
+def _category_from_filename(filename: str) -> str:
+    """Infer category from filename prefix before first '-'."""
+    if "-" in filename:
+        return filename.split("-")[0]
+    return "general"
+
+
+def _resolve_path(category: str, filename: str, base_dir: Path | None = None) -> Path:
+    """Resolve full path for an experience file."""
+    root = base_dir or EXPERIENCE_ROOT
+    return root / category / filename
 
 
 def _read_frontmatter_confidence(filepath: Path) -> float | None:
@@ -88,13 +114,12 @@ def write_experience(
     body: str,
     base_dir: Path | None = None,
 ) -> Path:
-    """Write an experience file with YAML frontmatter + Markdown body.
+    """Write an experience file to category/filename.
 
     If file already exists, call backup_before_update() first.
     Returns the written file path.
     """
-    _validate_path_component(category)
-    _validate_path_component(filename)
+    _validate_path(category, filename)
     root = base_dir or EXPERIENCE_ROOT
     cat_dir = root / category
     cat_dir.mkdir(parents=True, exist_ok=True)
@@ -111,8 +136,7 @@ def write_experience(
 
 def backup_before_update(category: str, filename: str, base_dir: Path | None = None):
     """Backup current version to _history/<filename>.<timestamp>.md before overwriting."""
-    _validate_path_component(category)
-    _validate_path_component(filename)
+    _validate_path(category, filename)
     root = base_dir or EXPERIENCE_ROOT
     src = root / category / filename
     if not src.exists():
@@ -127,8 +151,7 @@ def backup_before_update(category: str, filename: str, base_dir: Path | None = N
 
 def archive_file(category: str, filename: str, base_dir: Path | None = None):
     """Move file to _archive/<YYYY-MM-DD>/ — never deletes."""
-    _validate_path_component(category)
-    _validate_path_component(filename)
+    _validate_path(category, filename)
     root = base_dir or EXPERIENCE_ROOT
     src = root / category / filename
     if not src.exists():
@@ -142,52 +165,36 @@ def archive_file(category: str, filename: str, base_dir: Path | None = None):
 
 
 def rebuild_index(base_dir: Path | None = None):
-    """Scan all experience files and rebuild index.md + _index.md for each category."""
+    """Scan all category subdirectories and rebuild index.md."""
     root = base_dir or EXPERIENCE_ROOT
-    total = 0
-    cat_counts = {}
     all_files = []
 
     for cat in CATEGORIES:
         cat_dir = root / cat
         if not cat_dir.exists():
-            cat_counts[cat] = 0
             continue
-        files = sorted(f for f in cat_dir.glob("*.md") if f.name != "_index.md")
-        cat_counts[cat] = len(files)
-        total += len(files)
-
-        idx_lines = [f"# {cat} 经验索引", ""]
-        for f in files:
-            conf = _read_frontmatter_confidence(f)
-            conf_str = f" (confidence={conf:.2f})" if conf is not None else ""
-            idx_lines.append(f"- [{f.stem}]({f.name}){conf_str}")
-        (cat_dir / "_index.md").write_text("\n".join(idx_lines), encoding="utf-8")
-
-        for f in files:
+        for f in sorted(cat_dir.glob("*.md")):
             conf = _read_frontmatter_confidence(f) or 0.5
             title = _extract_title_from_file(f)
-            all_files.append((f.stat().st_mtime, cat, f.name, conf, title))
+            rel_path = f"{cat}/{f.name}"
+            all_files.append((f.stat().st_mtime, cat, f.name, conf, title, rel_path))
 
-    # Build index.md
+    total = len(all_files)
     all_files.sort(reverse=True)
+
     lines = [
         "# 机械臂经验索引",
         "",
         f"总经验数: {total}",
         f"最后更新: {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "## 分类分布",
+        "## 最近更新",
     ]
-    for cat in sorted(cat_counts.keys()):
-        lines.append(f"- {cat}: {cat_counts[cat]}")
-    lines.append("")
-    lines.append("## 最近更新")
     if all_files:
-        for mtime, cat, name, conf, title in all_files[:10]:
-            display_title = title or name.replace(".md", "").replace("-", " ")
-            lines.append(f"- [{cat}] {display_title} | {name} (confidence={conf:.2f})")
-            fpath = root / cat / name
+        for mtime, cat, fname, conf, title, rel_path in all_files[:10]:
+            display_title = title or fname.replace(".md", "").replace("-", " ")
+            lines.append(f"- {display_title} | {rel_path} (confidence={conf:.2f})")
+            fpath = root / rel_path
             file_bullets = _extract_bullets_from_file(fpath)
             for b in file_bullets:
                 lines.append(f"  {b}")
@@ -195,11 +202,7 @@ def rebuild_index(base_dir: Path | None = None):
         lines.append("（暂无经验）")
 
     (root / "index.md").write_text("\n".join(lines), encoding="utf-8")
-    logger.info(
-        "experience_index_rebuilt",
-        total_experiences=total,
-        categories=list(cat_counts.keys()),
-    )
+    logger.info("experience_index_rebuilt", total_experiences=total)
 
 
 def _build_frontmatter(fm: dict) -> list[str]:

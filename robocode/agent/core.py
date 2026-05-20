@@ -11,6 +11,19 @@ from robocode.services.analytics.logger import get_logger
 
 logger = get_logger("agent")
 
+
+def _summarize_params(params: dict, max_len: int = 80) -> str:
+    """Summarize tool params, truncating long values like code blocks."""
+    parts = []
+    for k, v in params.items():
+        if isinstance(v, str) and len(v) > max_len:
+            v = v[:max_len] + "..."
+        elif isinstance(v, (list, dict)):
+            v = f"<{len(v)} items>"
+        parts.append(f"{k}={v}")
+    return ", ".join(parts)
+
+
 SYSTEM_PROMPT = """你是一个专业的机器人控制助手，控制一台 Episode 6 轴机械臂。
 
 ## 运行环境
@@ -71,7 +84,7 @@ class AgentLoop:
         self.tool_handlers = tool_handlers or {}
         self.tool_schemas = tool_schemas or []
         self.max_iterations = max_iterations
-        self.context = ContextMemory()
+        self.context = ContextMemory(max_tokens=15000)
         self.guard = guard
         self.risk_levels = risk_levels or {}
         self._state = OrchestratorState.IDLE
@@ -172,14 +185,92 @@ class AgentLoop:
         self._save_checkpoint()
         return "已达最大迭代次数，任务未完成。"
 
+    _HARDWARE_SPEC_CACHE: str | None = None
+
+    @classmethod
+    def _load_hardware_spec(cls) -> str:
+        """Load episode1-spec.md content, cached at class level."""
+        if cls._HARDWARE_SPEC_CACHE is not None:
+            return cls._HARDWARE_SPEC_CACHE
+        from pathlib import Path
+
+        spec_path = Path(__file__).resolve().parent.parent / "experience" / "episode1-spec.md"
+        try:
+            raw = spec_path.read_text(encoding="utf-8")
+            # Strip YAML frontmatter if present
+            if raw.startswith("---"):
+                end = raw.find("---", 3)
+                if end != -1:
+                    raw = raw[end + 3 :].strip()
+            cls._HARDWARE_SPEC_CACHE = raw
+        except Exception:
+            cls._HARDWARE_SPEC_CACHE = ""
+        return cls._HARDWARE_SPEC_CACHE
+
     def _build_system_prompt(self) -> str:
-        """Build system prompt with optional experience index summary appended."""
+        """Build system prompt with hardware spec + experience index appended."""
         prompt = SYSTEM_PROMPT
+        spec = self._load_hardware_spec()
+        if spec:
+            prompt += "\n\n## 硬件手册（强制已知——回答任何关节/位姿问题前必须对照）\n\n" + spec
         if self._experience_reader is not None:
             summary = self._experience_reader.get_index_summary()
             if summary:
                 prompt += "\n\n" + summary
         return prompt
+
+    def get_conversation_transcript(self) -> list[dict]:
+        """Build structured transcript for the Reflector LLM.
+
+        Each entry has role-specific fields:
+          - user: content (max 500 chars)
+          - tool_call: tool name, params (max 200 chars)
+          - tool_result: success flag, message (max 300 chars, NO placeholders)
+        """
+        transcript: list[dict] = []
+        for msg in self.context.messages:
+            role = msg.get("role", "")
+            if role == "user":
+                content = msg.get("content", "")
+                if content.strip():
+                    transcript.append({"role": "user", "content": content[:500]})
+            elif role == "assistant":
+                text = msg.get("content") or ""
+                tool_calls = msg.get("tool_calls") or []
+                if text.strip():
+                    transcript.append({"role": "assistant", "content": text[:300]})
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    args_str = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    params_str = _summarize_params(args, max_len=200)
+                    transcript.append(
+                        {
+                            "role": "tool_call",
+                            "tool": fn.get("name", "?"),
+                            "params": params_str,
+                        }
+                    )
+            elif role == "tool":
+                result_str = msg.get("content", "{}")
+                try:
+                    result = json.loads(result_str) if isinstance(result_str, str) else result_str
+                    success = result.get("success", True)
+                    message = str(result.get("message", "")) if isinstance(result, dict) else ""
+                except (json.JSONDecodeError, TypeError):
+                    success = True
+                    message = ""
+                transcript.append(
+                    {
+                        "role": "tool_result",
+                        "success": success,
+                        "message": message[:300],
+                    }
+                )
+        return transcript
 
     def inject_failure_annotation(self, tool_name: str, failures: list[str]):
         """Inject failure annotation into current conversation context."""

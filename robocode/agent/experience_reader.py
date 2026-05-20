@@ -53,10 +53,10 @@ class ExperienceReader:
         ]
         for e in visible[:10]:
             marker = "⭐" if e.get("confidence", 0) >= _CONFIDENCE_STAR else "⚠"
-            lines.append(
-                f"- {marker} [{e.get('category', '?')}] {e.get('title', e.get('filename', '?'))} "
-                f"(confidence={e.get('confidence', 0):.2f}) → {e.get('category', '')}/{e.get('filename', '')}"
-            )
+            title = e.get("title", e.get("filename", "?"))
+            conf = e.get("confidence", 0)
+            rel_path = e.get("rel_path", e.get("filename", "?"))
+            lines.append(f"- {marker} {title} (confidence={conf:.2f}) → {rel_path}")
             for b in e.get("bullets", []):
                 lines.append(f"  {b}")
         return "\n".join(lines)
@@ -87,40 +87,30 @@ class ExperienceReader:
         if m:
             self.total_experiences = int(m.group(1))
 
-        _ENTRY_RE = re.compile(
-            r"-\s*\[(\w+)\]\s+(.+?)\s*\|\s*([\w./-]+\.md)\s*\(confidence=([\d.]+)\)"
-        )
-        _ENTRY_OLD_RE = re.compile(r"-\s*\[(\w+)\]\s+([\w./-]+\.md)(?:\s+\(confidence=([\d.]+)\))?")
+        # Matches: - title | category/filename.md (confidence=X)
+        _ENTRY_RE = re.compile(r"-\s+(.+?)\s*\|\s*([\w./-]+\.md)\s*\(confidence=([\d.]+)\)")
         lines = content.split("\n")
         i = 0
         while i < len(lines):
             line = lines[i].strip()
             em = _ENTRY_RE.match(line)
-            if em:
-                cat, title, filename, conf_str = (
-                    em.group(1),
-                    em.group(2).strip(),
-                    em.group(3),
-                    em.group(4),
-                )
-                try:
-                    conf = float(conf_str)
-                except (ValueError, TypeError):
-                    conf = 0.5
-            else:
-                em_old = _ENTRY_OLD_RE.match(line)
-                if not em_old:
-                    i += 1
-                    continue
-                cat = em_old.group(1)
-                filename = em_old.group(2)
+            if not em:
+                i += 1
+                continue
+
+            title = em.group(1).strip()
+            rel_path = em.group(2)  # e.g. "hardware/episode1-spec.md" or "code/code-experience.md"
+            conf_str = em.group(3)
+            try:
+                conf = float(conf_str)
+            except (ValueError, TypeError):
                 conf = 0.5
-                if em_old.group(3):
-                    try:
-                        conf = float(em_old.group(3))
-                    except (ValueError, TypeError):
-                        pass
-                title = filename.replace(".md", "").replace("-", " ")
+
+            # Split category/filename from the path
+            if "/" in rel_path:
+                cat, fname = rel_path.split("/", 1)
+            else:
+                cat, fname = "general", rel_path
 
             bullets: list[str] = []
             j = i + 1
@@ -139,7 +129,8 @@ class ExperienceReader:
             self._entries.append(
                 {
                     "category": cat,
-                    "filename": filename,
+                    "filename": fname,
+                    "rel_path": rel_path,
                     "title": title,
                     "confidence": conf,
                     "bullets": bullets,

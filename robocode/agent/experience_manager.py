@@ -11,12 +11,13 @@ from collections import defaultdict
 from pathlib import Path
 from robocode.services.analytics.logger import get_logger
 from robocode.agent.experience_filesystem import (
-    CATEGORIES,
     _read_frontmatter_confidence,
     write_experience,
     backup_before_update,
     archive_file,
     rebuild_index,
+    EXPERIENCE_ROOT,
+    CATEGORIES,
 )
 
 logger = get_logger("experience_manager")
@@ -47,7 +48,7 @@ def _confidence_rationale(confidence: float, data_points: int, category: str) ->
 class ExperienceManager:
     """Analyzes collected data and manages experience file lifecycle."""
 
-    MIN_PHYSICS_DATA_POINTS = 2
+    MIN_PHYSICS_DATA_POINTS = 3
     MIN_FAILURE_CASES = 1
 
     def __init__(self, db, session_id: str = ""):
@@ -87,12 +88,18 @@ class ExperienceManager:
                 skipped_incomplete += 1
                 continue
             delta = [abs(a - b) for a, b in zip(after, before)]
+            max_d = max(delta)
+            if max_d == 0:
+                skipped_incomplete += 1
+                continue
             by_tool[r["tool_name"]].append(
                 {
                     "speed_ratio": r.get("speed_ratio", 1.0),
                     "delta": delta,
-                    "max_delta": max(delta),
+                    "max_delta": max_d,
                     "duration_ms": r.get("duration_ms", 0),
+                    "joints_before": before,
+                    "joints_after": after,
                 }
             )
 
@@ -115,10 +122,15 @@ class ExperienceManager:
                     continue
                 avg_max_delta = sum(e["max_delta"] for e in group) / len(group)
                 avg_duration = sum(e["duration_ms"] for e in group) / len(group)
+                # Include raw angle data for the Reflector LLM
+                samples = [
+                    {"before": e["joints_before"], "after": e["joints_after"]} for e in group[:5]
+                ]
                 group_stats[sr] = {
                     "count": len(group),
                     "avg_max_delta": round(avg_max_delta, 2),
                     "avg_duration_ms": round(avg_duration, 1),
+                    "samples": samples,
                 }
 
             if group_stats:
@@ -164,11 +176,16 @@ class ExperienceManager:
         if not raw:
             return None
 
-        by_category = defaultdict(lambda: {"failures": [], "successes": [], "total": 0})
+        by_category = defaultdict(
+            lambda: {"failures": [], "successes": [], "free_texts": [], "total": 0}
+        )
         for r in raw:
             cat = r["category"]
             choices = json.loads(r["choices"]) if r["choices"] else {}
+            free_text = r.get("free_text", "")
             by_category[cat]["total"] += 1
+            if free_text:
+                by_category[cat]["free_texts"].append(free_text)
             if r["is_failure"]:
                 by_category[cat]["failures"].append(choices)
             else:
@@ -360,6 +377,29 @@ class ExperienceManager:
         """Check if an experience should be pruned."""
         return confidence < 0.3 and data_points < 5
 
+    @staticmethod
+    def analyze_conversation(transcript: list[dict]) -> dict | None:
+        """Analyze conversation transcript for structure patterns.
+
+        Returns dict with turns, correction_count, corrections.
+        """
+        if not transcript:
+            return None
+        user_msgs = [m for m in transcript if m.get("role") == "user"]
+        corrections = []
+        for m in user_msgs:
+            content = m.get("content", "")
+            if any(
+                kw in content
+                for kw in ("不对", "改成", "应该是", "纠正", "别", "不要", "换", "这才对")
+            ):
+                corrections.append(content)
+        return {
+            "turns": len(user_msgs),
+            "correction_count": len(corrections),
+            "corrections": corrections,
+        }
+
     # ── Experience Update / Merge / Prune ─────────────────────────────
 
     def update_experience(
@@ -374,12 +414,6 @@ class ExperienceManager:
 
         Returns True if the file existed and was updated.
         """
-        from robocode.agent.experience_filesystem import (
-            EXPERIENCE_ROOT,
-            backup_before_update,
-            write_experience,
-        )
-
         root = base_dir or EXPERIENCE_ROOT
         filepath = root / category / filename
         if not filepath.exists():
@@ -411,124 +445,91 @@ class ExperienceManager:
         return True
 
     def merge_experiences(self, base_dir=None) -> int:
-        """Scan for similar experiences in same category (>80% similarity) and merge.
+        """Scan for similar experiences (>80% similarity) across all categories and merge.
 
         Archived originals go to _archive/. Returns number of merges performed.
         """
-        from robocode.agent.experience_filesystem import EXPERIENCE_ROOT
-
         root = base_dir or EXPERIENCE_ROOT
-        # Count total candidates
-        total_files = 0
-        cat_file_counts = {}
+        all_files = []
         for cat in CATEGORIES:
             cat_dir = root / cat
             if not cat_dir.exists():
                 continue
-            files = sorted(f for f in cat_dir.glob("*.md") if f.name != "_index.md")
-            if files:
-                cat_file_counts[cat] = len(files)
-                total_files += len(files)
+            for f in sorted(cat_dir.glob("*.md")):
+                all_files.append((cat, f))
 
-        logger.info(
-            "merge_scan_start",
-            total_files=total_files,
-            categories=cat_file_counts,
-        )
+        if len(all_files) < 2:
+            return 0
+
+        logger.info("merge_scan_start", total_files=len(all_files))
 
         merged_count = 0
-        merge_decisions = []
-        for cat in CATEGORIES:
-            cat_dir = root / cat
-            if not cat_dir.exists():
+        merged = set()
+        for i in range(len(all_files)):
+            cat_i, fi = all_files[i]
+            if fi.name in merged:
                 continue
-            files = sorted(f for f in cat_dir.glob("*.md") if f.name != "_index.md")
-            if len(files) < 2:
-                continue
-
-            # Find similar pairs
-            merged = set()
-            for i in range(len(files)):
-                if files[i].name in merged:
+            for j in range(i + 1, len(all_files)):
+                cat_j, fj = all_files[j]
+                if fj.name in merged:
                     continue
-                for j in range(i + 1, len(files)):
-                    if files[j].name in merged:
-                        continue
-                    sim = self._file_similarity(files[i], files[j])
-                    if sim < 0.8:
-                        continue
+                sim = self._file_similarity(fi, fj)
+                if sim < 0.8:
+                    continue
 
-                    # Merge: higher data_points becomes target, lower becomes source
-                    fm_a = self._read_frontmatter(files[i])
-                    fm_b = self._read_frontmatter(files[j])
-                    if fm_a.get("data_points", 0) >= fm_b.get("data_points", 0):
-                        target, source = files[i], files[j]
-                        target_fm, source_fm = fm_a, fm_b
-                    else:
-                        target, source = files[j], files[i]
-                        target_fm, source_fm = fm_b, fm_a
+                fm_a = self._read_frontmatter(fi)
+                fm_b = self._read_frontmatter(fj)
+                if fm_a.get("data_points", 0) >= fm_b.get("data_points", 0):
+                    target_cat, target, source_cat, source = cat_i, fi, cat_j, fj
+                    target_fm, source_fm = fm_a, fm_b
+                else:
+                    target_cat, target, source_cat, source = cat_j, fj, cat_i, fi
+                    target_fm, source_fm = fm_b, fm_a
 
-                    # Log merge decision
-                    decision = {
-                        "category": cat,
-                        "target": target.name,
-                        "source": source.name,
-                        "similarity": round(sim, 3),
-                        "target_confidence": target_fm.get("confidence", 0),
-                        "source_confidence": source_fm.get("confidence", 0),
-                        "target_data_points": target_fm.get("data_points", 0),
-                        "source_data_points": source_fm.get("data_points", 0),
-                    }
-                    merge_decisions.append(decision)
-                    logger.info("merge_decision", **decision)
+                logger.info(
+                    "merge_decision",
+                    target=f"{target_cat}/{target.name}",
+                    source=f"{source_cat}/{source.name}",
+                    similarity=round(sim, 3),
+                )
 
-                    # Combine: average confidence, sum data_points, merge tags
-                    merged_fm = {**target_fm}
-                    merged_fm["confidence"] = round(
-                        (target_fm.get("confidence", 0.5) + source_fm.get("confidence", 0.5)) / 2, 2
-                    )
-                    merged_fm["data_points"] = target_fm.get("data_points", 0) + source_fm.get(
-                        "data_points", 0
-                    )
-                    tags = list(
-                        set(
-                            (
-                                target_fm.get("tags", [])
-                                if isinstance(target_fm.get("tags"), list)
-                                else [target_fm.get("tags", cat)]
-                            )
-                            + (
-                                source_fm.get("tags", [])
-                                if isinstance(source_fm.get("tags"), list)
-                                else [source_fm.get("tags", cat)]
-                            )
+                merged_fm = {**target_fm}
+                merged_fm["confidence"] = round(
+                    (target_fm.get("confidence", 0.5) + source_fm.get("confidence", 0.5)) / 2, 2
+                )
+                merged_fm["data_points"] = target_fm.get("data_points", 0) + source_fm.get(
+                    "data_points", 0
+                )
+                merged_fm["tags"] = list(
+                    set(
+                        (
+                            target_fm.get("tags", [])
+                            if isinstance(target_fm.get("tags"), list)
+                            else []
+                        )
+                        + (
+                            source_fm.get("tags", [])
+                            if isinstance(source_fm.get("tags"), list)
+                            else []
                         )
                     )
-                    merged_fm["tags"] = tags
-                    merged_fm["updated"] = time.strftime("%Y-%m-%d")
+                )
+                merged_fm["updated"] = time.strftime("%Y-%m-%d")
 
-                    # Merge body: append source body with attribution, deduplicate bullets
-                    target_body = self._read_body(target)
-                    source_body = self._read_body(source)
-                    merged_body = self._merge_bodies(target_body, source_body, source.name)
+                target_body = self._read_body(target)
+                source_body = self._read_body(source)
+                merged_body = self._merge_bodies(target_body, source_body, source.name)
 
-                    # Archive source, update target
-                    archive_file(cat, source.name, base_dir=root)
-                    merged.add(source.name)
-                    backup_before_update(cat, target.name, base_dir=root)
-                    write_experience(cat, target.name, merged_fm, merged_body, base_dir=root)
-                    merged_count += 1
+                archive_file(source_cat, source.name, base_dir=root)
+                merged.add(source.name)
+                backup_before_update(target_cat, target.name, base_dir=root)
+                write_experience(target_cat, target.name, merged_fm, merged_body, base_dir=root)
+                merged_count += 1
 
-            # Rebuild after merging
-            if merged:
-                rebuild_index(base_dir=root)
+        if merged_count:
+            rebuild_index(base_dir=root)
 
-        logger.info(
-            "merge_scan_done",
-            merges_performed=merged_count,
-            total_merge_decisions=len(merge_decisions),
-        )
-
+        logger.info("merge_scan_done", merges_performed=merged_count)
         return merged_count
 
     def prune_experiences(self, base_dir=None) -> int:
@@ -536,67 +537,39 @@ class ExperienceManager:
 
         Returns number of files pruned.
         """
-        from robocode.agent.experience_filesystem import EXPERIENCE_ROOT
-
         root = base_dir or EXPERIENCE_ROOT
-        # Scan all files first
         all_files = []
         for cat in CATEGORIES:
             cat_dir = root / cat
             if not cat_dir.exists():
                 continue
             for f in cat_dir.glob("*.md"):
-                if f.name == "_index.md":
-                    continue
                 conf = _read_frontmatter_confidence(f) or 0.5
                 fm = self._read_frontmatter(f)
                 dp = fm.get("data_points", 0)
                 all_files.append(
-                    {
-                        "category": cat,
-                        "filename": f.name,
-                        "confidence": conf,
-                        "data_points": dp,
-                    }
+                    {"category": cat, "filename": f.name, "confidence": conf, "data_points": dp}
                 )
 
         candidates = [f for f in all_files if self.should_prune(f["confidence"], f["data_points"])]
 
-        logger.info(
-            "prune_scan_start",
-            total_files=len(all_files),
-            candidates=len(candidates),
-            candidate_details=[
-                {
-                    "file": f"{c['category']}/{c['filename']}",
-                    "confidence": c["confidence"],
-                    "data_points": c["data_points"],
-                }
-                for c in candidates
-            ],
-        )
+        logger.info("prune_scan_start", total_files=len(all_files), candidates=len(candidates))
 
         pruned = 0
         for c in candidates:
-            cat, filename = c["category"], c["filename"]
             logger.info(
                 "prune_decision",
-                file=f"{cat}/{filename}",
+                file=f"{c['category']}/{c['filename']}",
                 confidence=c["confidence"],
                 data_points=c["data_points"],
                 reason="confidence < 0.3 且 data_points < 5",
             )
-            archive_file(cat, filename, base_dir=root)
+            archive_file(c["category"], c["filename"], base_dir=root)
             pruned += 1
 
         if pruned:
             rebuild_index(base_dir=root)
             logger.info("prune_scan_done", pruned_count=pruned)
-        elif candidates:
-            logger.info(
-                "prune_scan_done", pruned_count=0, note="candidates found but archive failed"
-            )
-        # No else: nothing to prune, no log needed
 
         return pruned
 
@@ -804,13 +777,14 @@ class ExperienceManager:
             lines.append(f"- 总数: {cat_data['total']}")
             failures = cat_data.get("failures", [])
             successes = cat_data.get("successes", [])
+            free_texts = cat_data.get("free_texts", [])
             if successes:
                 lines.append(f"- 成功: {len(successes)} 例")
             if failures:
                 lines.append(f"- 失败: {len(failures)} 例")
-                for f in failures[:3]:
-                    details = ", ".join(f"{k}={v}" for k, v in f.items())
-                    lines.append(f"  - {details}")
+            if free_texts:
+                for ft in free_texts[:3]:
+                    lines.append(f"  - 反馈: {ft[:120]}")
         return lines
 
     @staticmethod

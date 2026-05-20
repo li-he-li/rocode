@@ -100,6 +100,8 @@ class PhysicsCollector:
             return None
         if len(before_angles) != len(after_angles):
             return None
+        if None in before_angles or None in after_angles:
+            return None
 
         joint_delta = [round(a - b, 2) for a, b in zip(after_angles, before_angles)]
         return {
