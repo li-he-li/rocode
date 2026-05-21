@@ -78,7 +78,8 @@ class TestSlashDispatcher:
             # No arg lists sessions
             result2 = d.dispatch("/resume")
             assert result2.handled is True
-            assert "会话" in result2.message
+            assert result2.action == "resume_select"
+            assert sid[:12] in result2.message
         finally:
             db.close()
             if os.path.exists(tmp):
