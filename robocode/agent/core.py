@@ -194,7 +194,9 @@ class AgentLoop:
             return cls._HARDWARE_SPEC_CACHE
         from pathlib import Path
 
-        spec_path = Path(__file__).resolve().parent.parent / "experience" / "episode1-spec.md"
+        spec_path = (
+            Path(__file__).resolve().parent.parent / "experience" / "hardware" / "episode1-spec.md"
+        )
         try:
             raw = spec_path.read_text(encoding="utf-8")
             # Strip YAML frontmatter if present

@@ -110,6 +110,25 @@ class SafetyPolicy:
         except (ValueError, TypeError):
             return None
 
+    def assert_not_estopped(self):
+        """Raise if robot is in emergency stop state. Requires backend to be set externally."""
+        if hasattr(self, "_backend") and self._backend:
+            status = self._backend.get_status()
+            if status.estop_active:
+                raise RuntimeError("急停已触发，操作被拒绝")
+
+    def check_workspace(self, x: float, y: float, z: float):
+        """Assert workspace bounds. Raises RuntimeError on violation."""
+        result = self.check_workspace_bounds(x, y, z)
+        if not result.passed:
+            raise RuntimeError(result.reason)
+
+    def assert_joint_limits(self, angles: list[float]):
+        """Assert joint limits. Raises RuntimeError on violation."""
+        result = self.check_joint_limits(angles)
+        if not result.passed:
+            raise RuntimeError(result.reason)
+
     def check_operation(self, tool_name: str, params: dict) -> list[SafetyCheck]:
         logger.info("safety_check", tool_name=tool_name)
         results = []
