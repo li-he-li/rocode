@@ -1,5 +1,5 @@
 ---
-updated: 2026-05-20
+updated: 2026-05-21
 ---
 
 # Robocode 开发索引
@@ -17,16 +17,18 @@ updated: 2026-05-20
 | experience-evolution-system | ✅ 完成 | 95% (76/80) → P0×4 + P1×3 修复，85 tests 全绿 |
 | experience-evolution-v2-reflector | ✅ 完成 | LLM 反思层融入 + 可读性改进，57 tests |
 | 经验进化 v3 — LLM 驱动合并 | ✅ 完成 | Reflector prompt 重写 + 扁平化 + 硬件注入 + sandbox 放宽 |
-| 全量测试 | ⚠️ 阻塞 | FakeProvider 缺失，测试套件无法运行 |
+| 全量测试 | ✅ 通过 | 396/396 全部通过（2026-05-21 修复） |
 
 ## 模块地图
 
 ```
 robocode/
 ├── cli/           # prompt_toolkit REPL + slash命令 + voice语音
-│   ├── app.py     # RobocodeApp 主入口，AgentLoop 集成
-│   ├── slash.py   # SlashDispatcher（/help /exit /status /tools /audit /resume /backend /estop）
-│   └── voice.py   # VoiceController（faster-whisper + webrtcvad）
+│   ├── app.py            # RobocodeApp 主入口，AgentLoop 集成（679行，已拆分）
+│   ├── tools_setup.py    # 工具注册 + handler 映射构建（工厂函数聚合）
+│   ├── experience_ui.py  # 经验管家 + 标注面板 + 置信度反馈 + bullet 合并
+│   ├── slash.py          # SlashDispatcher（/help /exit /status /tools /audit /resume /backend /estop）
+│   └── voice.py          # VoiceController（faster-whisper + webrtcvad）
 ├── agent/         # ReAct Agent
 │   ├── core.py    # AgentLoop + SYSTEM_PROMPT + tool 执行
 │   ├── context.py # ContextMemory（消息管理 + checkpoint 序列化）
@@ -88,10 +90,12 @@ experience/
 | `experience-evolution` `manager` `merge` `prune` `feedback` | [design/05-14](05-design/2026-05-14.md) [design/05-15](05-design/2026-05-15.md) [changelog/05-15](01-changelog/2026-05-15.md) |
 | `reflector` `llm` `readability` `bullets` | [design/05-19](05-design/2026-05-19.md) [changelog/05-19](01-changelog/2026-05-19.md) [tests/05-19](03-tests/2026-05-19.md) |
 | `session-management` `ttl` `resume` | [changelog/05-15](01-changelog/2026-05-15.md) |
-| `review` `audit` `robustness` `gates` | [reviews/05-15](04-reviews/2026-05-15.md) [reviews/05-19](04-reviews/2026-05-19.md) |
+| `review` `audit` `robustness` `gates` | [reviews/05-15](04-reviews/2026-05-15.md) [reviews/05-19](04-reviews/2026-05-19.md) [reviews/05-21](04-reviews/2026-05-21.md) |
+| `hardware` `spec` `arm-span` | [reviews/05-21](04-reviews/2026-05-21.md) |
 | `gatekeeper` `full-review` `reflector` `P0` | [reviews/05-19](04-reviews/2026-05-19.md) |
 | `experience-evolution` `bugfix` `data-flow` `P0` `P1` | [changelog/05-20](01-changelog/2026-05-20.md) [tests/05-20](03-tests/2026-05-20.md) |
-| `reflector-prompt` `flat` `hardware` `sandbox` `llm-merge` | [changelog/05-20](01-changelog/2026-05-20.md) |
+| `resume` `cli` `test` `slash` | [debug/05-21](02-debug/2026-05-21.md) |
+| `refactor` `app` `split` `tools` `regression` `cleanup` `skills` `verification` | [changelog/05-21](01-changelog/2026-05-21.md) |
 
 ## 时间线
 
@@ -112,10 +116,16 @@ experience/
 | 2026-05-19 | **Gatekeeper 全量审查**：feature/experience-evolution-system 分支 30+ 文件审查，发现 P0×2 / P1×5 / P2×2 |
 | 2026-05-20 | **经验进化系统全链路修复**：审查发现 P0×4（analyze_conversation 缺失/解析器失效/签名崩溃/feed_text 丢失）+ P1×3，85 tests 全绿 |
 | 2026-05-20 | **经验进化 v3 — LLM 驱动合并**：Reflector prompt 重写（因果优先+自由标签+多场景示例）+ 扁平化分类 + 硬件描述注入 + sandbox 放宽 write_text + LLM 决定合并目标 + confidence 只升不降 |
+| 2026-05-21 | **Gatekeeper 审查**：hardware spec 路径修正 + 文档扩展 + 臂展数值修正（447→507mm），PASS 通过 |
+| 2026-05-21 | **10 个失败测试修复**：ContextMemory 字段重命名 + ExperienceReader 格式变更 + Voice mock + CLI JSON 断言，396/396 全绿 |
+| 2026-05-21 | **FakeEpisodeAPP 去重**：`_SandboxEpisodeAPP` 手工副本 → `_build_sandbox_header()` 从 FakeEpisodeAPP 反射生成，自动补全 2 个遗漏方法 |
+| 2026-05-21 | **cli/app.py 拆分重构**：1414 行 → 679 行（-52%），提取 `tools_setup.py`（477 行）+ `experience_ui.py`（376 行） |
 
 ## 已知问题 / 待办
 
-- **P0-1**: FakeProvider 缺失（被 8ebbe74 重构删除），测试套件完全无法运行
+- ~~P0-1: FakeProvider 缺失（被 8ebbe74 重构删除），测试套件完全无法运行~~ → 已修复，396/396 全绿
+- ~~cli/app.py 臃肿（1414 行）~~ → 已拆分：679 行 app.py + 477 行 tools_setup.py + 376 行 experience_ui.py
+- ~~FakeEpisodeAPP 重复定义（codegen_tools.py 中的 _SandboxEpisodeAPP 手工副本）~~ → 已修复：反射生成
 - **P1-1**: exec_tools shell=True 注入风险（黑名单 + 审批双重防护，但 shell=True 本身是隐患）
 - **P1-2**: 受保护文件列表缺少 agent/core.py、motion_tools.py 等关键文件
 - **P1-3**: session_summary() success 统计 SQL 条件错误（json_extract boolean vs string）
