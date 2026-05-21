@@ -1,10 +1,11 @@
 """SDK code generation tools — escape hatch: generate, approve, sandbox, execute."""
 
+import inspect
 import os
 import resource
+import re
 import time
 import subprocess
-import re
 from pathlib import Path
 from robocode.utils.models import ToolResult
 
@@ -22,11 +23,7 @@ FORBIDDEN_PATTERNS = [
     r"__import__\(",
     r"eval\(",
     r"exec\(",
-    r"open\([^)]*['\"][wa]",
-    r"open\([^)]*mode\s*=\s*['\"][wa]",
     r"ctypes\.",
-    r"io\.open\(",
-    r"builtins\.open\(",
     r"compile\s*\(\s*[^,]+,\s*[^,]+,\s*['\"]exec",
     r"importlib\b",
     r"shutil\.",
@@ -46,33 +43,65 @@ FORBIDDEN_PATTERNS = [
 # not by blocking write APIs.
 
 
+def _build_sandbox_header() -> str:
+    """从 FakeEpisodeAPP 反射生成沙箱头部, 保证签名永不同步喵~"""
+    from robocode.backends.sdk_backend import FakeEpisodeAPP
+
+    fake = FakeEpisodeAPP()
+    lines = [
+        "# Auto-generated sandbox preamble (reflected from FakeEpisodeAPP)",
+        "import sys, json, math, time",
+        "",
+        "class _SandboxEpisodeAPP:",
+    ]
+
+    _SAMPLE_ARGS: dict[str, list] = {
+        "move_xyz_rotation": [[100, 0, 200], [180, 0, 90]],
+        "move_linear_xyz_rotation": [[100, 0, 200], [180, 0, 90]],
+        "angle_mode": [[180, 90, 83, 30, 110, 30]],
+        "servo_gripper": [45],
+        "emergency_stop": [False],
+        "set_free_mode": [True],
+    }
+
+    for name in sorted(dir(fake)):
+        if name.startswith("_"):
+            continue
+        method = getattr(fake, name)
+        if not callable(method):
+            continue
+
+        sig = inspect.signature(method)
+        params = []
+        for p_name, p in sig.parameters.items():
+            if p.default is inspect.Parameter.empty:
+                params.append(p_name)
+            else:
+                params.append(f"{p_name}={p.default!r}")
+
+        params_str = ", ".join(params)
+
+        sample = _SAMPLE_ARGS.get(name)
+        try:
+            if sample:
+                result = method(*sample)
+            else:
+                result = method()
+        except Exception:
+            result = 0.5
+
+        lines.append(f"    def {name}(self, {params_str}):")
+        lines.append(f"        return {result!r}")
+        lines.append("")
+
+    lines.append("robot = _SandboxEpisodeAPP()")
+    return "\n".join(lines)
+
+
+SANDBOX_HEADER = _build_sandbox_header()
+
+
 class CodeSandbox:
-    # Parameter names MUST match real FakeEpisodeAPP — LLM uses keyword args per API docs
-    SANDBOX_HEADER = """
-# Auto-generated sandbox preamble
-import sys, json, math, time
-
-class _SandboxEpisodeAPP:
-    def move_xyz_rotation(self, position, orientation, rotation_order="zyx", speed_ratio=1.0):
-        return 0.5
-    def angle_mode(self, angles, speed_ratio=1.0):
-        return 0.5
-    def get_motor_angles(self):
-        return [180.0, 90.0, 83.0, 30.0, 110.0, 30.0]
-    def get_pose(self, rotation_order="xyz"):
-        return [260.0, 0.0, 200.0, 180.0, 0.0, 90.0]
-    def gripper_on(self):
-        return 0.05
-    def gripper_off(self):
-        return 0.05
-    def servo_gripper(self, angle):
-        return 1.0
-    def emergency_stop(self, enable):
-        return 0.05
-
-robot = _SandboxEpisodeAPP()
-"""
-
     @classmethod
     def scan_forbidden(cls, code: str) -> list[str]:
         return [p for p in FORBIDDEN_PATTERNS if re.search(p, code)]
@@ -94,7 +123,7 @@ robot = _SandboxEpisodeAPP()
                 "saved_path": "",
             }
 
-        full_code = cls.SANDBOX_HEADER + "\n" + code
+        full_code = SANDBOX_HEADER + "\n" + code
         saved_path = ""
         if save:
             _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
