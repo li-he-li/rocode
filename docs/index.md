@@ -98,6 +98,7 @@ experience/
 | `resume` `cli` `test` `slash` | [debug/05-21](02-debug/2026-05-21.md) |
 | `refactor` `app` `split` `tools` `regression` `cleanup` `skills` `verification` | [changelog/05-21](01-changelog/2026-05-21.md) |
 | `experience` `tool-guard` `auto-inject` `@tool_name` | [changelog/05-26](01-changelog/2026-05-26.md) |
+| `review` `safety` `observability` `dead-code` `P0` `P1` | [reviews/05-26](04-reviews/2026-05-26.md) |
 | `experience` `tool-guard` `reader-agent` `dual-layer` | [design/05-21](05-design/dual-layer-experience-system.md) |
 
 ## 时间线
@@ -125,6 +126,7 @@ experience/
 | 2026-05-21 | **cli/app.py 拆分重构**：1414 行 → 679 行（-52%），提取 `tools_setup.py`（477 行）+ `experience_ui.py`（376 行） |
 | 2026-05-21 | **双层经验系统设计**：主 Agent ToolGuard 自动注入 + 子 Agent index.md 读书人，解决经验不被读取的问题 |
 | 2026-05-26 | **双层经验系统层1实现**：工具调用自动注入 @tool_name 关联经验（Push模型），7工具×21标注，Reflector闭环输出@tag |
+| 2026-05-26 | **全量审查**：57文件审查，P0×6 / P1×16 / P2×24，安全+可监测+可进化+可驾驭+可迭代+无用代码 |
 
 ## 已知问题 / 待办
 
@@ -139,4 +141,5 @@ experience/
 - monitorable-analytics: 8 个验证任务待完成
 - run_grasp.py: IK/通信失败不区分（增强需求，非阻塞）
 - ctypes 线程中断标记：P0-4 已标记，待处理
+- **全量审查**：P0×6 / P1×16 / P2×24，详见 [reviews/05-26](04-reviews/2026-05-26.md)
 - **双层经验系统**：~~设计方案已完成~~ → **层1已实现**（自动注入），层2（子Agent读书人）待实施
