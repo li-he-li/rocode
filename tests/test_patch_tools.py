@@ -3,6 +3,8 @@
 import tempfile
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 PATCH_ADD_FUNCTION = """--- a/robocode/tools/_patch_test_temp.py
 +++ b/robocode/tools/_patch_test_temp.py
@@ -166,34 +168,39 @@ class TestDestructiveRejection:
 
 class TestCheckRunner:
     def test_check_runner_reports_syntax_errors(self):
-        """3.4: Check runner identifies syntax errors."""
         from robocode.tools.patch_tools import run_checks
-        import os
 
-        # Write a file with syntax error
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write("def broken(\n")
-            tmp = f.name
-
+        tmp = _PROJECT_ROOT / "tests" / "_tmp_check_syntax.py"
         try:
-            result = run_checks(file_path=tmp)
+            tmp.write_text("def broken(\n")
+            result = run_checks(file_path=str(tmp))
             assert isinstance(result, dict)
             assert "import_check" in result
-            # Syntax error should be caught
             assert result["import_check"]["passed"] is False
         finally:
-            os.unlink(tmp)
+            tmp.unlink(missing_ok=True)
 
     def test_check_runner_accepts_valid_syntax(self):
         from robocode.tools.patch_tools import run_checks
+
+        tmp = _PROJECT_ROOT / "tests" / "_tmp_check_valid.py"
+        try:
+            tmp.write_text("def valid_function():\n    return 42\n")
+            result = run_checks(file_path=str(tmp))
+            assert result["import_check"]["passed"] is True
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def test_check_runner_rejects_outside_workspace(self):
+        from robocode.tools.patch_tools import run_checks
         import os
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write("def valid_function():\n    return 42\n")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, dir="/tmp") as f:
+            f.write("x = 1\n")
             tmp = f.name
-
         try:
             result = run_checks(file_path=tmp)
-            assert result["import_check"]["passed"] is True
+            assert result["success"] is False
+            assert "超出工作空间" in result["message"]
         finally:
             os.unlink(tmp)

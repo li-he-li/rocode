@@ -206,6 +206,7 @@ class AgentLoop:
                     raw = raw[end + 3 :].strip()
             cls._HARDWARE_SPEC_CACHE = raw
         except Exception:
+            logger.warning("hardware_spec_load_failed", path=str(spec_path))
             cls._HARDWARE_SPEC_CACHE = ""
         return cls._HARDWARE_SPEC_CACHE
 

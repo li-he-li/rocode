@@ -39,7 +39,7 @@ def _read_experience(path: str) -> str:
     safe_path = EXPERIENCE_ROOT / path
     try:
         resolved = safe_path.resolve()
-        if not str(resolved).startswith(str(EXPERIENCE_ROOT.resolve())):
+        if not resolved.is_relative_to(EXPERIENCE_ROOT.resolve()):
             return "路径越界"
         return resolved.read_text(encoding="utf-8")
     except Exception:

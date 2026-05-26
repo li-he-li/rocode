@@ -38,6 +38,9 @@ FORBIDDEN_PATTERNS = [
     r"type\s*\(\s*__",
 ]
 
+# 注意：正则扫描是尽力而为的第一层防线，不是安全保证。
+# 实际隔离由 RLIMIT_AS(512MB) + RLIMIT_NPROC(0) + python3 -I 保证。
+
 # File write operations are ALLOWED (needed for writing scripts to /tmp).
 # Protection is enforced by the clean_env whitelist and resource limits,
 # not by blocking write APIs.
@@ -141,7 +144,7 @@ class CodeSandbox:
             clean_env = {
                 k: v
                 for k, v in os.environ.items()
-                if k.startswith(("PYTHON", "PATH", "HOME", "LANG", "LC_", "TMPDIR", "USER"))
+                if k.startswith(("PYTHON", "PATH", "LANG", "LC_", "TMPDIR"))
             }
             proc = subprocess.run(
                 ["python3", "-I", "-c", full_code],

@@ -97,6 +97,7 @@ class AuditDB:
         ]
         for col_name, col_type in _tool_calls_additions:
             if col_name not in existing_cols:
+                assert col_name.isidentifier(), f"invalid column: {col_name}"
                 self.conn.execute(f"ALTER TABLE tool_calls ADD COLUMN {col_name} {col_type}")
                 self.conn.commit()
 

@@ -209,6 +209,14 @@ def run_checks(*, file_path: str, **kwargs) -> dict:
     if not p.is_absolute():
         p = (_PROJECT_ROOT / p).resolve()
 
+    workspace_file = _resolve_inside_workspace(file_path)
+    if workspace_file is None:
+        return ToolResult(
+            success=False,
+            message=f"文件超出工作空间，需操作者批准: {file_path}",
+            metrics={"file_path": file_path, "outside_workspace": True},
+        ).model_dump(mode="json")
+
     results = {}
 
     # Syntax check via compile
