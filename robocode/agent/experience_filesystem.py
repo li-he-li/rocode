@@ -107,6 +107,59 @@ def _extract_title_from_file(filepath: Path) -> str:
     return ""
 
 
+def _extract_description(filepath: Path) -> str:
+    """Extract description from frontmatter or derive from file content."""
+    try:
+        content = filepath.read_text(encoding="utf-8")
+        # Try frontmatter description field first
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end != -1:
+                fm_text = content[3:end]
+                m = re.search(r"^description:\s*(.+)$", fm_text, re.MULTILINE)
+                if m:
+                    return m.group(1).strip().strip('"')
+        # Fallback: extract tags and bullet count to build description
+        tags = []
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end != -1:
+                fm_text = content[3:end]
+                m = re.search(r"^tags:\s*\[(.+?)\]", fm_text, re.MULTILINE)
+                if m:
+                    tags = [t.strip() for t in m.group(1).split(",")]
+        bullet_count = 0
+        body = content[content.find("---", 3) + 3 :] if content.startswith("---") else content
+        in_section = False
+        for line in body.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                in_section = stripped == "## 建议"
+                continue
+            if in_section and stripped.startswith("- [") and "]" in stripped:
+                bullet_count += 1
+        tag_str = "、".join(tags[:3]) if tags else ""
+        if tag_str and bullet_count:
+            return f"{tag_str}相关，{bullet_count} 条规则"
+        elif bullet_count:
+            return f"{bullet_count} 条操作规则"
+        return ""
+    except Exception:
+        return ""
+
+
+def _extract_tags(filepath: Path) -> list[str]:
+    """Extract tags from frontmatter."""
+    try:
+        content = filepath.read_text(encoding="utf-8")[:2000]
+        m = re.search(r"^tags:\s*\[(.+?)\]", content, re.MULTILINE)
+        if m:
+            return [t.strip() for t in m.group(1).split(",") if t.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def write_experience(
     category: str,
     filename: str,
@@ -165,7 +218,7 @@ def archive_file(category: str, filename: str, base_dir: Path | None = None):
 
 
 def rebuild_index(base_dir: Path | None = None):
-    """Scan all category subdirectories and rebuild index.md."""
+    """Scan all category subdirectories and rebuild index.md in catalog format."""
     root = base_dir or EXPERIENCE_ROOT
     all_files = []
 
@@ -175,41 +228,69 @@ def rebuild_index(base_dir: Path | None = None):
             continue
         for f in sorted(cat_dir.glob("*.md")):
             conf = _read_frontmatter_confidence(f) or 0.5
-            title = _extract_title_from_file(f)
+            title = _extract_title_from_file(f) or f.stem.replace("-", " ")
+            description = _extract_description(f)
             rel_path = f"{cat}/{f.name}"
-            all_files.append((f.stat().st_mtime, cat, f.name, conf, title, rel_path))
+            all_files.append((conf, cat, f.name, title, description, rel_path, f))
 
     total = len(all_files)
-    all_files.sort(reverse=True)
+    # Sort by confidence descending
+    all_files.sort(key=lambda x: (-x[0], x[1], x[3]))
 
     lines = [
-        "# 机械臂经验索引",
+        "# 机械臂经验目录",
         "",
         f"总经验数: {total}",
         f"最后更新: {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "## 最近更新",
+        "## 目录",
+        "",
+        "| # | 经验 | 置信度 | 文件路径 |",
+        "|---|------|:------:|----------|",
     ]
-    if all_files:
-        for mtime, cat, fname, conf, title, rel_path in all_files[:10]:
-            display_title = title or fname.replace(".md", "").replace("-", " ")
-            lines.append(f"- {display_title} | {rel_path} (confidence={conf:.2f})")
-            fpath = root / rel_path
-            file_bullets = _extract_bullets_from_file(fpath)
-            for b in file_bullets:
-                lines.append(f"  {b}")
-    else:
-        lines.append("（暂无经验）")
+
+    # Collect tags for topic index
+    topic_map: dict[str, list[str]] = {}
+
+    for i, (conf, cat, fname, title, desc, rel_path, fpath) in enumerate(all_files, 1):
+        marker = "⭐" if conf >= 0.7 else "⚠"
+        desc_text = f" — {desc}" if desc else ""
+        lines.append(f"| {i} | {marker} **{title}**{desc_text} | {conf:.2f} | {rel_path} |")
+
+        # Collect tags → file mapping for topic index
+        tags = _extract_tags(fpath)
+        for tag in tags:
+            short = title[:30] + ("..." if len(title) > 30 else "")
+            topic_map.setdefault(tag, []).append(short)
+
+    lines.append("")
+    lines.append(
+        "> **使用方式**：先看目录找到相关的经验，然后用 `read_file` "
+        "工具读取经验文件全文。执行任何运动/抓取/夹爪操作前，必须查阅相关经验。"
+    )
+
+    # Topic index
+    if topic_map:
+        lines.append("")
+        lines.append("## 按主题索引")
+        lines.append("")
+        lines.append("| 主题 | 相关经验 |")
+        lines.append("|------|---------|")
+        for tag in sorted(topic_map.keys()):
+            files = "、".join(topic_map[tag])
+            lines.append(f"| **{tag}** | {files} |")
 
     (root / "index.md").write_text("\n".join(lines), encoding="utf-8")
     logger.info("experience_index_rebuilt", total_experiences=total)
 
 
 def _build_frontmatter(fm: dict) -> list[str]:
-    """Build YAML frontmatter block."""
+    """Build YAML frontmatter block. Handles lists, strings with spaces, None."""
     lines = ["---"]
     for k, v in fm.items():
-        if isinstance(v, list):
+        if v is None:
+            lines.append(f'{k}: ""')
+        elif isinstance(v, list):
             items = ", ".join(str(x) for x in v)
             lines.append(f"{k}: [{items}]")
         elif isinstance(v, str) and (" " in v or v == ""):

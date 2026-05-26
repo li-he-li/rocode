@@ -294,6 +294,11 @@ class AgentLoop:
             except Exception:
                 logger.exception("checkpoint_save_failed")
 
+    def _get_tool_tips(self, tool_name: str) -> list[str]:
+        if self._experience_reader is None:
+            return []
+        return self._experience_reader.get_tool_tips(tool_name)
+
     async def _execute_tool(self, event: StreamEvent) -> dict:
         import time as _time
 
@@ -340,6 +345,16 @@ class AgentLoop:
                 result = await asyncio.to_thread(handler, **tool_input)
             rv = result.model_dump(mode="json") if isinstance(result, ToolResult) else result
             duration_ms = (_time.perf_counter() - t0) * 1000
+
+            # 注入经验提醒到工具结果中
+            tips = self._get_tool_tips(tool_name)
+            if tips:
+                msg = rv.get("message", "") if isinstance(rv, dict) else ""
+                tip_block = "\n💡 经验提醒:\n" + "\n".join(f"  ⚠ {t}" for t in tips)
+                if isinstance(rv, dict):
+                    rv["message"] = msg + tip_block
+                else:
+                    rv = {"message": tip_block}
 
             if self._metrics is not None:
                 self._metrics.record_latency("tool_execution", duration_ms)

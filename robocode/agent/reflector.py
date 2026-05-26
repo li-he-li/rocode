@@ -3,12 +3,48 @@
 Runs AFTER rule-based ExperienceManager analysis. Consumes the structured
 summary (not raw data), produces delta bullets that capture cross-dimensional
 causal patterns the rule layer cannot detect.
+
+LLM 用 index.md 作为目录，通过 read_file 工具按需查阅经验全文，再做合并决策。
 """
 
 import difflib
+from pathlib import Path
 from robocode.services.analytics.logger import get_logger
 
 logger = get_logger("reflector")
+
+EXPERIENCE_ROOT = Path(__file__).resolve().parent.parent / "experience"
+
+_REFLECTOR_READ_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_experience",
+        "description": "读取经验文件的完整内容。参数 path 为相对于 experience/ 的路径，如 code/code-experience.md。用 index.md 目录找到相关文件后，读全文再做判断。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "经验文件路径，如 code/code-experience.md, vlm/vlm-desktop-detection.md",
+                }
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
+def _read_experience(path: str) -> str:
+    """读取 experience/ 下的文件全文，仅供 Reflector 内部使用。"""
+    safe_path = EXPERIENCE_ROOT / path
+    try:
+        resolved = safe_path.resolve()
+        if not str(resolved).startswith(str(EXPERIENCE_ROOT.resolve())):
+            return "路径越界"
+        return resolved.read_text(encoding="utf-8")
+    except Exception:
+        return "读取失败"
+
 
 REFLECTOR_SYSTEM_PROMPT = """你是机械臂操作分析专家。从会话记录和用户反馈中提炼可复用的操作经验。
 
@@ -45,9 +81,10 @@ REFLECTOR_SYSTEM_PROMPT = """你是机械臂操作分析专家。从会话记录
 
 ## 输出格式
 
-每条一行，格式：`- [意图] 内容`
+每条一行，格式：`- [意图] @tool_name 内容`
 
 - **意图**：用 2-8 个字概括这条经验的用途，自由定义
+- **@tool_name**：这条经验关联的工具名（如 @move_robot_xyz），一条可关联多个工具。如果不涉及具体工具，省略 @ 标注
 - **内容**：可直接被下次 Agent 引用的操作性建议，越具体越好
 
 如果要更新已有经验，内容末尾追加 `→ 更新:experience/文件名.md`
@@ -55,23 +92,23 @@ REFLECTOR_SYSTEM_PROMPT = """你是机械臂操作分析专家。从会话记录
 ## 格式示例(效果好的话允许描述物理关系)
 
 ### 运动控制
-- [保持朝下] J2/J3增大（抬臂）→ J5必须减小（手腕下压）才能保持摄像头朝下，反之亦然
-- [Z轴平移] move_robot_xyz 会重置 rotation 默认值 (180,0,90)，不能用它"只改z保持朝下"，用 move_robot_joints 代替
+- [保持朝下|RULE] @move_robot_xyz @move_robot_joints J2/J3增大（抬臂）→ J5必须减小（手腕下压）才能保持摄像头朝下，反之亦然
+- [Z轴平移|CAUTION] @move_robot_xyz move_robot_xyz 会重置 rotation 默认值 (180,0,90)，不能用它"只改z保持朝下"，用 move_robot_joints 代替
 - [朝下看范围] 已验证关节范围：J2∈[120,121], J3∈[59,103], J5∈[145,197], J1≈180
-- [速度选择] speed_ratio 0.3~0.5 精度最佳，≥0.6 振动显著
+- [速度选择|CAUTION] @move_robot_joints speed_ratio 0.3~0.5 精度最佳，≥0.6 振动显著
 
 ### VLM 桌面检测
-- [VLM检测流程] search_code 找 grasp_lib → generate_and_run_sdk_code 生成脚本 → execute_command 写到 /tmp → env DASHSCOPE_API_KEY=xxx conda run -n episode python3 执行
-- [API Key] DASHSCOPE_API_KEY 在 /home/li/work/Robot/.env，用 read_file 读取；用户提供的 key 优先于 .env 中的
-- [写脚本到 /tmp] generate_and_run_sdk_code 允许 Path.write_text()，禁止 os/subprocess；execute_command 禁止 | > < 等 shell 元字符
+- [VLM检测流程|PATTERN] @search_code @generate_and_run_sdk_code @execute_command search_code 找 grasp_lib → generate_and_run_sdk_code 生成脚本 → execute_command 写到 /tmp → env DASHSCOPE_API_KEY=xxx conda run -n episode python3 执行
+- [API Key|PATTERN] @read_file DASHSCOPE_API_KEY 在 /home/li/work/Robot/.env，用 read_file 读取；用户提供的 key 优先于 .env 中的
+- [写脚本到/tmp|CAUTION] @generate_and_run_sdk_code @execute_command generate_and_run_sdk_code 允许 Path.write_text()，禁止 os/subprocess；execute_command 禁止 | > < 等 shell 元字符
 
 ### 夹爪操作
-- [吸盘] control_suction(on) 后等待 0.5s 再移动，否则物体可能掉落
-- [伺服夹爪] angle<10 无实际抓取力，推荐 20~90；抓取前先确认目标位置
+- [吸盘|PATTERN] @control_suction control_suction(on) 后等待 0.5s 再移动，否则物体可能掉落
+- [伺服夹爪|PATTERN] @control_gripper angle<10 无实际抓取力，推荐 20~90；抓取前先确认目标位置
 
 ### 代码执行
-- [conda 环境] RealSense/VLM 相关脚本必须用 conda run -n episode python3 执行，Agent 本身的 .venv 没有这些依赖
-- [环境变量] 传环境变量给子进程用 `env KEY=value conda run ...`，直接 `KEY=value cmd` 会被当作未知命令
+- [conda 环境|PATTERN] @execute_command RealSense/VLM 相关脚本必须用 conda run -n episode python3 执行，Agent 本身的 .venv 没有这些依赖
+- [环境变量|PATTERN] @execute_command 传环境变量给子进程用 `env KEY=value conda run ...`，直接 `KEY=value cmd` 会被当作未知命令
 
 ## 禁止
 
@@ -148,7 +185,7 @@ def _build_reflection_context(
 
     # ── Existing experience index (for dedup) ──
     if experience_index:
-        parts.append("## 已有经验索引（不要重复已有内容；如需更新，末尾加 → 更新:文件名.md）")
+        parts.append("## 已有经验目录（用 read_experience 工具查阅全文后再决定新增/更新/跳过）")
         parts.append(experience_index)
         parts.append("")
 
@@ -315,6 +352,9 @@ class Reflector:
     ) -> list[dict]:
         """Run LLM reflection. Returns list of dicts with keys:
         {intent, content, update_target, raw}
+
+        LLM 先看 index.md 目录，通过 read_experience 工具查阅相关经验全文，
+        再做新增/更新/跳过的决策。
         """
         context = _build_reflection_context(
             transcript or [], physics, annotations, call_flows, conv_analysis, experience_index
@@ -325,14 +365,39 @@ class Reflector:
 
         logger.info("reflector_start", context_chars=len(context))
 
+        messages: list[dict] = [{"role": "user", "content": context}]
         full_text = ""
-        async for event in self._provider.stream(
-            system=REFLECTOR_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": context}],
-            tools=[],
-        ):
-            if event.kind == "text_delta":
-                full_text += event.payload.get("delta", "")
+
+        # 最多 3 轮：LLM 查阅经验 → 收到结果 → 输出 bullet
+        for _round in range(3):
+            tool_uses: list[dict] = []
+
+            async for event in self._provider.stream(
+                system=REFLECTOR_SYSTEM_PROMPT,
+                messages=messages,
+                tools=[_REFLECTOR_READ_TOOL],
+            ):
+                if event.kind == "text_delta":
+                    full_text += event.payload.get("delta", "")
+                elif event.kind == "tool_use":
+                    tool_uses.append(event.payload)
+
+            if not tool_uses:
+                break
+
+            # 执行工具调用，把结果追加到消息
+            for tu in tool_uses:
+                tool_input = tu.get("input", {})
+                path = tool_input.get("path", "")
+                content = _read_experience(path)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tu.get("id", ""),
+                        "content": content,
+                    }
+                )
+            logger.info("reflector_tool_round", tool_calls=len(tool_uses))
 
         parsed = extract_bullets_with_targets(full_text)[: self._max_bullets]
 

@@ -310,6 +310,22 @@ async def _run_exp_manage(app):
             existing_fm["confidence"] = min(round(old_conf + 0.03, 2), 0.95)
             existing_fm["updated"] = date_str
 
+            # Merge new tags from incoming bullets into existing tags
+            existing_tags: list[str] = existing_fm.get("tags", [])
+            if isinstance(existing_tags, str):
+                existing_tags = [
+                    t.strip() for t in existing_tags.strip("[]").split(",") if t.strip()
+                ]
+            new_tags: set[str] = set()
+            for b in bullets_to_add:
+                if b.startswith("- [") and "]" in b:
+                    for part in b[3:].split("]")[0].split("|"):
+                        tag = part.strip()
+                        if tag and tag not in existing_tags:
+                            new_tags.add(tag)
+            if new_tags:
+                existing_fm["tags"] = existing_tags + sorted(new_tags)
+
             parts = target_name.split("/", 1)
             cat, fname = (parts[0], parts[1]) if len(parts) == 2 else ("general", parts[0])
 
@@ -330,14 +346,32 @@ async def _run_exp_manage(app):
         if new_bullets:
             new_body += "## 建议\n\n" + "\n".join(new_bullets) + "\n"
 
+            # Derive description from first bullet's intent + content
+            description = ""
+            if new_bullets:
+                first = new_bullets[0]
+                if "] " in first:
+                    description = first.split("] ", 1)[1].strip()[:80]
+
+            # Extract tags from bullet intents
+            tags: list[str] = []
+            seen_tags: set[str] = set()
+            for b in new_bullets:
+                if b.startswith("- [") and "]" in b:
+                    tag = b[3:].split("]")[0].split("|")[0].strip()
+                    if tag and tag not in seen_tags:
+                        tags.append(tag)
+                        seen_tags.add(tag)
+
             frontmatter = {
                 "type": "operational",
-                "tags": [],
+                "tags": tags,
                 "confidence": confidence,
                 "data_points": data_points,
                 "sources": app._session_id,
                 "created": date_str,
                 "updated": date_str,
+                "description": description,
             }
 
             cat = _category_from_filename(filename)

@@ -1,5 +1,5 @@
 ---
-updated: 2026-05-21
+updated: 2026-05-26
 ---
 
 # Robocode 开发索引
@@ -17,6 +17,7 @@ updated: 2026-05-21
 | experience-evolution-system | ✅ 完成 | 95% (76/80) → P0×4 + P1×3 修复，85 tests 全绿 |
 | experience-evolution-v2-reflector | ✅ 完成 | LLM 反思层融入 + 可读性改进，57 tests |
 | 经验进化 v3 — LLM 驱动合并 | ✅ 完成 | Reflector prompt 重写 + 扁平化 + 硬件注入 + sandbox 放宽 |
+| 双层经验系统层1 — ToolGuard 自动注入 | ✅ 完成 | 工具调用时自动推送 @tool_name 关联经验，7个工具 × 21条标注 |
 | 全量测试 | ✅ 通过 | 396/396 全部通过（2026-05-21 修复） |
 
 ## 模块地图
@@ -96,6 +97,8 @@ experience/
 | `experience-evolution` `bugfix` `data-flow` `P0` `P1` | [changelog/05-20](01-changelog/2026-05-20.md) [tests/05-20](03-tests/2026-05-20.md) |
 | `resume` `cli` `test` `slash` | [debug/05-21](02-debug/2026-05-21.md) |
 | `refactor` `app` `split` `tools` `regression` `cleanup` `skills` `verification` | [changelog/05-21](01-changelog/2026-05-21.md) |
+| `experience` `tool-guard` `auto-inject` `@tool_name` | [changelog/05-26](01-changelog/2026-05-26.md) |
+| `experience` `tool-guard` `reader-agent` `dual-layer` | [design/05-21](05-design/dual-layer-experience-system.md) |
 
 ## 时间线
 
@@ -120,6 +123,8 @@ experience/
 | 2026-05-21 | **10 个失败测试修复**：ContextMemory 字段重命名 + ExperienceReader 格式变更 + Voice mock + CLI JSON 断言，396/396 全绿 |
 | 2026-05-21 | **FakeEpisodeAPP 去重**：`_SandboxEpisodeAPP` 手工副本 → `_build_sandbox_header()` 从 FakeEpisodeAPP 反射生成，自动补全 2 个遗漏方法 |
 | 2026-05-21 | **cli/app.py 拆分重构**：1414 行 → 679 行（-52%），提取 `tools_setup.py`（477 行）+ `experience_ui.py`（376 行） |
+| 2026-05-21 | **双层经验系统设计**：主 Agent ToolGuard 自动注入 + 子 Agent index.md 读书人，解决经验不被读取的问题 |
+| 2026-05-26 | **双层经验系统层1实现**：工具调用自动注入 @tool_name 关联经验（Push模型），7工具×21标注，Reflector闭环输出@tag |
 
 ## 已知问题 / 待办
 
@@ -134,3 +139,4 @@ experience/
 - monitorable-analytics: 8 个验证任务待完成
 - run_grasp.py: IK/通信失败不区分（增强需求，非阻塞）
 - ctypes 线程中断标记：P0-4 已标记，待处理
+- **双层经验系统**：~~设计方案已完成~~ → **层1已实现**（自动注入），层2（子Agent读书人）待实施
