@@ -28,6 +28,8 @@ from robocode.llm.deepseek_provider import DeepSeekProvider
 from robocode.config import Settings
 from robocode.tools.registry import ToolRegistry
 from robocode.backends.sdk_backend import SdkBackend
+from robocode.perception import VlmPerception, FakeVlmPerception
+from dotenv import load_dotenv
 from robocode.orchestrator.safety import SafetyPolicy
 from robocode.utils.cleanup import run_startup_cleanup
 from robocode.orchestrator.approval import ApprovalGate
@@ -188,6 +190,18 @@ class RobocodeApp:
 
         # Experience reader — loads index at startup
         self.experience_reader = ExperienceReader()
+
+        # VLM perception — camera + VLM API + depth→3D
+        load_dotenv(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env"
+            )
+        )
+        _api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if self._backend_fake:
+            self._vlm_perception = FakeVlmPerception(api_key=_api_key)
+        else:
+            self._vlm_perception = VlmPerception(api_key=_api_key)
 
         # Agent
         self.agent = AgentLoop(

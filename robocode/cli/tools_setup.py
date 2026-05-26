@@ -10,6 +10,7 @@ from robocode.tools.exec_tools import make_exec_tools
 from robocode.tools.code_tools import make_code_tools
 from robocode.tools.patch_tools import make_patch_tools
 from robocode.tools.wrapper_tools import make_wrapper_tools
+from robocode.tools.perception_tools import make_perception_tools
 
 
 def register_all_tools(app) -> None:
@@ -271,6 +272,44 @@ def register_all_tools(app) -> None:
             risk_level="L1",
         ),
     ]
+    # ── VLM 感知工具 ──
+    registry.register(
+        ToolEntry(
+            name="observe",
+            description="通用视觉感知：拍摄桌面照片并用 VLM 分析。用自然语言 prompt 描述想观察的内容（如'列出所有物体'、'工作区是否有障碍物'、'夹爪是否抓住物体'）。VLM 返回结构化观察结果和后续观察建议。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "描述想让 VLM 观察什么，越具体越好。如'列出桌面上所有物体及其位置关系'、'确认夹爪中是否有物体'",
+                    },
+                },
+                "required": ["prompt"],
+            },
+            risk_level="L0",
+            timeout_s=15.0,
+        )
+    )
+    registry.register(
+        ToolEntry(
+            name="locate",
+            description="定位特定物体并返回 3D 坐标 (mm)：拍照 → VLM 检测 → 深度图反投影。返回物体在相机坐标系下的真实三维位置，可直接用于 move_robot_xyz。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "要定位的物体描述，如'红色苹果'、'蓝色杯子'、'螺丝刀'",
+                    },
+                },
+                "required": ["target"],
+            },
+            risk_level="L0",
+            timeout_s=15.0,
+        )
+    )
+
     for entry in entries:
         registry.register(entry)
 
@@ -342,6 +381,7 @@ def build_handler_map(app) -> dict:
     handlers.update(make_code_tools())
     handlers.update(make_patch_tools())
     handlers.update(make_wrapper_tools(registry=app.registry))
+    handlers.update(make_perception_tools(app._vlm_perception))
 
     return handlers
 
