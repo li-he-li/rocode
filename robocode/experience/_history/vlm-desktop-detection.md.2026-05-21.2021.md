@@ -55,7 +55,7 @@ print(result)
 ## 建议
 
 - [桌面检测|PATTERN] VLM 检测桌面物体的完整流程：search_code 找 grasp_lib → generate_and_run_sdk_code 生成脚本（不用 os/subprocess）→ execute_command 用 python3 -c write_text 写到 /tmp → execute_command env DASHSCOPE_API_KEY=sk-xxx conda run -n episode python3 /tmp/脚本
-- [桌面检测|PATTERN] 执行 VLM 脚本的正确命令：`env DASHSCOPE_API_KEY=sk-6e7e3ba45ec64824badf6d741ef6de0f conda run -n episode python3 /tmp/vlm_desktop_detect.py`
+- [桌面检测|PATTERN] 执行 VLM 脚本的正确命令：`env DASHSCOPE_API_KEY=sk-xxx conda run -n episode python3 /tmp/vlm_desktop_detect.py`
 - [桌面检测|CAUTION] generate_and_run_sdk_code 禁止使用 os. / import os / subprocess. / write_text() / write_bytes()，代码中不能包含这些
 - [桌面检测|CAUTION] execute_command 禁止 shell 元字符：| ; > < & ` $ << 2>/dev/null，只能执行单命令
 - [桌面检测|CAUTION] DASHSCOPE_API_KEY 必须通过 env 传入，不能在 Python 里 os.environ 设置（conda run 会丢失环境变量）

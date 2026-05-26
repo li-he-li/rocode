@@ -23,7 +23,7 @@ success: True
 ## 建议
 
 - [桌面检测|PATTERN] @search_code @generate_and_run_sdk_code @execute_command VLM 检测桌面物体的完整流程：search_code 找 grasp_lib → generate_and_run_sdk_code 生成脚本（不用 os/subprocess）→ execute_command 用 python3 -c write_text 写到 /tmp → execute_command env DASHSCOPE_API_KEY=sk-xxx conda run -n episode python3 /tmp/脚本
-- [桌面检测|PATTERN] 执行 VLM 脚本的正确命令：`env DASHSCOPE_API_KEY=sk-6e7e3ba45ec64824badf6d741ef6de0f conda run -n episode python3 /tmp/vlm_desktop_detect.py`
+- [桌面检测|PATTERN] 执行 VLM 脚本的正确命令：`env DASHSCOPE_API_KEY=sk-xxx conda run -n episode python3 /tmp/vlm_desktop_detect.py`（Key 从 /home/li/work/Robot/.env 读取）
 - [桌面检测|CAUTION] @generate_and_run_sdk_code generate_and_run_sdk_code 禁止使用 os. / import os / subprocess. / write_text() / write_bytes()，代码中不能包含这些
 - [桌面检测|CAUTION] @execute_command execute_command 禁止 shell 元字符：| ; > < & ` $ << 2>/dev/null，只能执行单命令
 - [桌面检测|CAUTION] DASHSCOPE_API_KEY 必须通过 env 传入，不能在 Python 里 os.environ 设置（conda run 会丢失环境变量）
@@ -31,3 +31,6 @@ success: True
 - [桌面检测|CAUTION] API Key 要用用户确认的最新值，.env 中的可能是旧的
 - [代码执行|PATTERN] @execute_command 写临时脚本到 /tmp 的方法：execute_command 执行 `python3 -c "from pathlib import Path; Path('/tmp/xxx.py').write_text('脚本内容')"`
 - [桌面检测流程] @get_robot_status 用户确认"知道先看状态看摄像头是否朝下"→成功流程固化：先 `get_robot_status` 读关节 → 根据 J2/J3/J5/RX 计算朝向 → 若已朝下则跳过移动 → 直接执行 VLM 检测脚本
+- [VLM观察流程|PATTERN] @observe 使用 observe 工具时，prompt 应具体描述想观察的内容（如"列出所有物体及其位置关系"），避免笼统（如"看看"）
+- [VLM定位流程|PATTERN] @locate @observe 定位物体前先用 observe 确认物体在视野中，再调用 locate 获取精确 3D 坐标；locate 返回的坐标是相机坐标系下的近似值，留 5-10mm 余量
+- [多轮观察|PATTERN] @observe 观察结果中的 suggestions 不是 "sufficient" 时，应跟进第二轮观察以获取更精准的信息

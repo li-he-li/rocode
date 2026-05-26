@@ -83,7 +83,7 @@ print(f'Image ..., timeout_s=10)
 - [42] ✅ (内容已省略)
 - [43] 🔧 read_file(path=/home/li/work/Robot/src/6D/6D/graspnet-baseline/grasp_lib/config.py)
 - [44] ✅ (内容已省略)
-- [45] 👤 用户: api无效？sk-6e7e3ba45ec64824badf6d741ef6de0f不是这个吗？
+- [45] 👤 用户: api无效？sk-xxx不是这个吗？
 - [46] 🔧 execute_command(command=conda run -n episode python3 -c "
 import os
 os.environ['DASHSCOPE_API_KEY']='sk-..., timeout_s=120)

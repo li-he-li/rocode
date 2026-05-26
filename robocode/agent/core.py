@@ -321,7 +321,12 @@ class AgentLoop:
         return self._experience_reader.get_tool_tips(tool_name)
 
     async def _execute_hook(self, hook, tool_input: dict) -> dict:
-        """执行单个 hook: 调用 observe/locate handler，返回结果 dict 喵~"""
+        """执行单个 hook: 调用 observe/locate handler，返回结果 dict 喵~
+
+        Args:
+            hook: HookRule 实例（from robocode.perception.hooks）
+            tool_input: 原工具调用的参数字典（保留用于未来扩展，当前未使用）
+        """
         handler = self.tool_handlers.get(hook.action)
         if handler is None:
             return {"success": False, "message": f"Hook action 未注册: {hook.action}"}
