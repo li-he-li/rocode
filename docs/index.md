@@ -100,6 +100,7 @@ experience/
 | `refactor` `app` `split` `tools` `regression` `cleanup` `skills` `verification` | [changelog/05-21](01-changelog/2026-05-21.md) |
 | `experience` `tool-guard` `auto-inject` `@tool_name` | [changelog/05-26](01-changelog/2026-05-26.md) |
 | `review` `safety` `observability` `dead-code` `P0` `P1` | [reviews/05-26](04-reviews/2026-05-26.md) |
+| `harness` `7-gates` `gate-review` | [reviews/05-26-gates](04-reviews/2026-05-26-harness-gates.md) |
 | `experience` `tool-guard` `reader-agent` `dual-layer` | [design/05-21](05-design/dual-layer-experience-system.md) |
 
 ## 时间线
@@ -131,6 +132,7 @@ experience/
 | 2026-05-26 | **审查修复**：sandbox env收紧 + run_checks边界 + reflector路径遍历 + db列名校验 |
 | 2026-05-26 | **附录标注补齐**：12条关节知识bullet加@move_robot_joints，计划映射100%覆盖 |
 | 2026-05-26 | **经验质量保障**：置信度衰减(-0.01)+使用回涨(+0.02) + 三段冲突检测(>75%/55-75%/<55%) + 质量仪表盘 |
+| 2026-05-26 | **驭工程7-Gate门控审查**：4 PASS / 3 PARTIAL / 0 FAIL，P0×1（运动非幂等resume风险） |
 
 ## 已知问题 / 待办
 
@@ -147,3 +149,4 @@ experience/
 - ctypes 线程中断标记：P0-4 已标记，待处理
 - **全量审查**：P0×6 / P1×16 / P2×24，详见 [reviews/05-26](04-reviews/2026-05-26.md)
 - **经验质量保障**：✅ 置信度衰减 + 使用回涨 + 冲突检测 + 质量仪表盘
+- **驭工程7-Gate**：4/7 PASS，P0×1（运动非幂等resume），P1×3（N+1查询+prompt硬编码）
