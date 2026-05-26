@@ -11,12 +11,20 @@ import sys
 
 def _merge_bullets_replace(
     existing: list[str], new: list[str], threshold: float = 0.55
-) -> list[str]:
-    """合并 new bullets 入 existing，相似则替换，不相似则追加喵~"""
+) -> tuple[list[str], bool]:
+    """合并 new bullets 入 existing，相似则替换，不相似则追加喵~
+
+    相似度 > 75%: 直接替换（高置信）
+    相似度 55%-75%: 保留旧 bullet 并标记待确认（冲突检测）
+    相似度 < 55%: 追加为新 bullet
+
+    Returns: (merged_bullets, has_pending_review)
+    """
     import difflib
 
     replaced = set()
     merged = list(existing)
+    has_pending = False
 
     for nb in new:
         best_idx = -1
@@ -29,13 +37,19 @@ def _merge_bullets_replace(
                 best_ratio = ratio
                 best_idx = i
 
-        if best_ratio > threshold and best_idx >= 0:
+        if best_ratio > 0.75 and best_idx >= 0:
             merged[best_idx] = nb
             replaced.add(best_idx)
+        elif best_ratio > threshold and best_idx >= 0:
+            has_pending = True
+            marker = (
+                nb.replace("- [", "- [待确认|", 1) if nb.startswith("- [") else f"- [待确认] {nb}"
+            )
+            merged.append(marker)
         else:
             merged.append(nb)
 
-    return merged
+    return merged, has_pending
 
 
 async def _prompt_annotation_after_task(app, pending_count: int):
@@ -295,7 +309,7 @@ async def _run_exp_manage(app):
                 app.console.print(f"  [dim]⊘ {target_name} 所有内容已存在，跳过[/dim]")
                 continue
 
-            merged_bullets = _merge_bullets_replace(existing_bullets, deduped)
+            merged_bullets, has_pending = _merge_bullets_replace(existing_bullets, deduped)
 
             existing_body = mgr._read_body(target_path)
             body_before_suggestions = existing_body
@@ -309,6 +323,9 @@ async def _run_exp_manage(app):
             existing_fm["data_points"] = old_dp + data_points
             existing_fm["confidence"] = min(round(old_conf + 0.03, 2), 0.95)
             existing_fm["updated"] = date_str
+
+            if has_pending:
+                existing_fm["pending_review"] = True
 
             # Merge new tags from incoming bullets into existing tags
             existing_tags: list[str] = existing_fm.get("tags", [])
@@ -395,10 +412,95 @@ async def _run_exp_manage(app):
     if pruned:
         app.console.print(f"[dim]🗑 {pruned} 条低置信度经验已归档[/dim]")
 
+    # ── Step 5: 置信度衰减 + 回涨 ──
+    _decay_and_reinforce(app)
+
     rebuild_index()
     if has_data:
         app.db.mark_physics_processed()
         app.db.mark_annotations_processed()
     app.experience_reader = ExperienceReader()
     app.agent._system_prompt = app.agent._build_system_prompt()
+
+    # ── Step 6: 质量仪表盘 ──
+    _print_quality_dashboard(app)
+
     app.console.print("[green]✅ 经验整理完成（已同步到当前会话）[/green]")
+
+
+def _decay_and_reinforce(app):
+    """置信度衰减 + 回涨：所有经验 -0.01，被使用过的经验 +0.02 回涨喵~"""
+    from robocode.agent.experience_manager import ExperienceManager
+
+    reader = app.experience_reader
+    if reader is None or not reader.has_experiences():
+        return
+
+    used = reader.used_files
+    mgr = ExperienceManager(db=app.db, session_id=app._session_id)
+    visible = reader.get_visible_experiences(min_confidence=0.0)
+    decayed = 0
+    reinforced = 0
+
+    for exp in visible:
+        rel_path = exp.get("rel_path", "")
+        cat = exp.get("category", "")
+        fname = exp.get("filename", "")
+        if not cat or not fname:
+            continue
+
+        old_conf = exp.get("confidence", 0.5)
+        new_conf = old_conf - 0.01
+
+        if rel_path in used:
+            new_conf += 0.02
+            reinforced += 1
+
+        new_conf = max(0.1, min(0.95, round(new_conf, 2)))
+        if abs(new_conf - old_conf) < 0.005:
+            continue
+
+        mgr.update_experience(cat, fname, frontmatter_updates={"confidence": new_conf})
+        decayed += 1
+
+    if decayed:
+        app.console.print(
+            f"[dim]📉 {decayed} 条经验置信度已调整"
+            f"（{reinforced} 条回涨，{decayed - reinforced} 条衰减）[/dim]"
+        )
+
+
+def _print_quality_dashboard(app):
+    """输出经验质量仪表盘喵~"""
+    reader = app.experience_reader
+    if reader is None or not reader.has_experiences():
+        return
+
+    visible = reader.get_visible_experiences(min_confidence=0.0)
+    if not visible:
+        return
+
+    confs = [e.get("confidence", 0.5) for e in visible]
+    avg_conf = sum(confs) / len(confs)
+    max_conf = max(confs)
+    min_conf = min(confs)
+
+    tip_counts = {}
+    for tool, tips in reader._tool_tips.items():
+        if tips:
+            tip_counts[tool] = len(tips)
+
+    pending = sum(1 for e in visible if e.get("pending_review"))
+
+    parts = [
+        f"📊 经验质量: {len(visible)}个文件"
+        f" | avg={avg_conf:.2f} max={max_conf:.2f} min={min_conf:.2f}"
+    ]
+    if pending:
+        parts.append(f" | ⚠待确认={pending}")
+    if tip_counts:
+        top3 = sorted(tip_counts.items(), key=lambda x: -x[1])[:3]
+        hits = " ".join(f"{t}={c}" for t, c in top3)
+        parts.append(f" | tips: {hits}")
+
+    app.console.print(f"[dim]{''.join(parts)}[/dim]")

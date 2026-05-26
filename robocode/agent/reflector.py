@@ -102,6 +102,12 @@ REFLECTOR_SYSTEM_PROMPT = """你是机械臂操作分析专家。从会话记录
 - [API Key|PATTERN] @read_file DASHSCOPE_API_KEY 在 /home/li/work/Robot/.env，用 read_file 读取；用户提供的 key 优先于 .env 中的
 - [写脚本到/tmp|CAUTION] @generate_and_run_sdk_code @execute_command generate_and_run_sdk_code 允许 Path.write_text()，禁止 os/subprocess；execute_command 禁止 | > < 等 shell 元字符
 
+### VLM 视觉感知
+- [观察流程|PATTERN] @observe observe 前先确认机械臂摄像头朝下（J2∈[105,120], J5∈[145,197]），否则 VLM 看不到桌面目标
+- [多轮观察|PATTERN] @observe 首次 observe 用宽泛 prompt（如"列出所有物体"），根据返回的 suggestions 字段决定是否跟进第二轮观察
+- [定位精度|CAUTION] @locate locate 返回的 3D 坐标是相机坐标系下的近似值，抓取前留 5-10mm 余量
+- [定位时机|PATTERN] @locate 定位物体前先用 observe 确认物体在视野中，再调用 locate 获取精确 3D 坐标
+
 ### 夹爪操作
 - [吸盘|PATTERN] @control_suction control_suction(on) 后等待 0.5s 再移动，否则物体可能掉落
 - [伺服夹爪|PATTERN] @control_gripper angle<10 无实际抓取力，推荐 20~90；抓取前先确认目标位置

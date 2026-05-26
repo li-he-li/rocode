@@ -29,6 +29,7 @@ from robocode.config import Settings
 from robocode.tools.registry import ToolRegistry
 from robocode.backends.sdk_backend import SdkBackend
 from robocode.perception import VlmPerception, FakeVlmPerception
+from robocode.perception.hooks import HookRegistry
 from dotenv import load_dotenv
 from robocode.orchestrator.safety import SafetyPolicy
 from robocode.utils.cleanup import run_startup_cleanup
@@ -203,6 +204,9 @@ class RobocodeApp:
         else:
             self._vlm_perception = VlmPerception(api_key=_api_key)
 
+        # Hook registry — pre/post VLM hooks for tool execution
+        self._hook_registry = HookRegistry()
+
         # Agent
         self.agent = AgentLoop(
             provider=DeepSeekProvider(self.settings),
@@ -216,6 +220,7 @@ class RobocodeApp:
             physics_collector=self.physics_collector,
             annotation_collector=self.annotation_collector,
             experience_reader=self.experience_reader,
+            hook_registry=self._hook_registry,
         )
 
         # Wire registry + backend + voice into slash dispatcher (created before them)

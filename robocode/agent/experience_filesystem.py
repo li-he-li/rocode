@@ -26,6 +26,7 @@ CATEGORIES = [
     "hardware",
     "session",
     "general",
+    "perception",
 ]
 
 

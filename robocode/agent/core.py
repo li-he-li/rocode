@@ -54,6 +54,24 @@ SYSTEM_PROMPT = """你是一个专业的机器人控制助手，控制一台 Epi
 - 观察位姿：抓取开始前机械臂自动移动到预设观察位姿
 - 执行时自动使用 conda episode 环境
 
+## VLM 视觉感知
+
+你拥有视觉观察能力，通过以下工具感知工作区：
+- **observe(prompt)**: 拍摄桌面照片并用 VLM 分析。用自然语言描述想观察的内容，VLM 返回结构化观察结果和后续观察建议。
+- **locate(target)**: 定位特定物体，返回相机坐标系下的 3D 坐标 (mm)，可直接用于 move_robot_xyz。
+
+### 多轮观察策略
+- 首次 observe 使用宽泛 prompt（如"列出工作区所有物体及其位置"）
+- 根据 VLM 返回的 suggestions 字段决定是否跟进第二轮观察
+- 如果 suggestions 不是 "sufficient"，按建议调整观察角度或 prompt 再次观察
+- 定位物体前先用 observe 确认物体在视野中，再用 locate 获取坐标
+
+### 观察时机
+- 移动机械臂前：observe 确认目标位置和无障碍物
+- 抓取后：observe 确认物体是否被成功抓取
+- 放置后：observe 确认物体已放置在正确位置
+- 不确定空间状态时：observe 获取视觉反馈，不要盲猜坐标
+
 ## 执行原则
 - 不确定时主动提问澄清，不要猜测
 - 抓取前先调用 get_robot_status 确认机器人状态
@@ -79,6 +97,7 @@ class AgentLoop:
         physics_collector=None,
         annotation_collector=None,
         experience_reader=None,
+        hook_registry=None,
     ):
         self.provider = provider
         self.tool_handlers = tool_handlers or {}
@@ -94,6 +113,7 @@ class AgentLoop:
         self._physics_collector = physics_collector
         self._annotation_collector = annotation_collector
         self._experience_reader = experience_reader
+        self._hook_registry = hook_registry
         self._turn_number = 0
         self._prev_call_id: int | None = None
         self._current_task_instruction: str | None = None
@@ -300,6 +320,26 @@ class AgentLoop:
             return []
         return self._experience_reader.get_tool_tips(tool_name)
 
+    async def _execute_hook(self, hook, tool_input: dict) -> dict:
+        """执行单个 hook: 调用 observe/locate handler，返回结果 dict 喵~"""
+        handler = self.tool_handlers.get(hook.action)
+        if handler is None:
+            return {"success": False, "message": f"Hook action 未注册: {hook.action}"}
+        try:
+            kwargs = (
+                {"prompt": hook.prompt_template}
+                if hook.action == "observe"
+                else {"target": hook.prompt_template}
+            )
+            if asyncio.iscoroutinefunction(handler):
+                result = await handler(**kwargs)
+            else:
+                result = await asyncio.to_thread(handler, **kwargs)
+            return result if isinstance(result, dict) else result.model_dump(mode="json")
+        except Exception as e:
+            logger.warning("hook_execution_failed", hook_action=hook.action, error=str(e))
+            return {"success": False, "message": f"Hook 执行失败: {e}"}
+
     async def _execute_tool(self, event: StreamEvent) -> dict:
         import time as _time
 
@@ -330,6 +370,17 @@ class AgentLoop:
                     message=f"操作被拒绝: {gr.reason}",
                     metrics={"decision": gr.decision},
                 ).model_dump(mode="json")
+
+        # ── Pre-hooks: 执行前自动观察喵~ ──
+        if self._hook_registry is not None:
+            for hook in self._hook_registry.get_pre_hooks(tool_name):
+                if hook.auto:
+                    hook_result = await self._execute_hook(hook, tool_input)
+                    self.context.add_tool_result(
+                        f"hook-pre-{tool_name}-{hook.action}",
+                        hook.action,
+                        json.dumps(hook_result, ensure_ascii=False),
+                    )
 
         # Physics capture before (L1/L2 only)
         before_snapshot = None
@@ -362,6 +413,18 @@ class AgentLoop:
                 self._metrics.record("tool_execution_total")
 
             logger.info("tool_execution_completed", tool_name=tool_name, duration_ms=duration_ms)
+
+            # ── Post-hooks: 执行后自动验证喵~ ──
+            if self._hook_registry is not None and rv.get("success", True):
+                for hook in self._hook_registry.get_post_hooks(tool_name):
+                    if hook.auto:
+                        hook_result = await self._execute_hook(hook, tool_input)
+                        self.context.add_tool_result(
+                            f"hook-post-{tool_name}-{hook.action}",
+                            hook.action,
+                            json.dumps(hook_result, ensure_ascii=False),
+                        )
+
             # Record to audit DB (with call flow context)
             if self.guard is not None:
                 tool_call_id = self.guard.record_call(

@@ -21,6 +21,8 @@ class ExperienceReader:
         self._base = base_dir or EXPERIENCE_ROOT
         self._entries: list[dict] = []
         self._tool_tips: dict[str, list[str]] = {}
+        self._tip_source_files: dict[str, list[str]] = {}
+        self._used_files: set[str] = set()
         self.total_experiences = 0
         self._load_index()
         self._build_tool_index()
@@ -34,6 +36,8 @@ class ExperienceReader:
         """重新加载 index 和工具索引（经验文件变更后调用）。"""
         self._entries = []
         self._tool_tips = {}
+        self._tip_source_files = {}
+        self._used_files = set()
         self._load_index()
         self._build_tool_index()
 
@@ -80,15 +84,25 @@ class ExperienceReader:
         return "\n".join(lines)
 
     def get_tool_tips(self, tool_name: str, max_tips: int = 3) -> list[str]:
-        """返回与该工具关联的经验提醒（最多 max_tips 条）。"""
+        """返回与该工具关联的经验提醒（最多 max_tips 条），同时记录使用。"""
         tips = self._tool_tips.get(tool_name, [])
+        sources = self._tip_source_files.get(tool_name, [])
+        for rel_path in sources[:max_tips]:
+            self._used_files.add(rel_path)
         return tips[:max_tips]
+
+    @property
+    def used_files(self) -> set[str]:
+        """本次会话中被 get_tool_tips 返回过的经验文件路径集合。"""
+        return self._used_files
 
     def _build_tool_index(self):
         """从所有经验文件的 bullet 中提取 @tool_name，构建反向索引。"""
         self._tool_tips = {}
+        self._tip_source_files = {}
         for entry in self._entries:
-            file_bullets = self._read_file_bullets(entry["rel_path"])
+            rel_path = entry["rel_path"]
+            file_bullets = self._read_file_bullets(rel_path)
             for bullet in file_bullets:
                 tools = re.findall(r"@(\w+)", bullet)
                 if not tools:
@@ -96,6 +110,7 @@ class ExperienceReader:
                 clean = re.sub(r"\s*@\w+", "", bullet).strip()
                 for tool_name in tools:
                     self._tool_tips.setdefault(tool_name, []).append(clean)
+                    self._tip_source_files.setdefault(tool_name, []).append(rel_path)
 
     def _read_file_bullets(self, rel_path: str) -> list[str]:
         """从经验文件的 ## 建议 section 提取全部 bullet。"""
