@@ -427,7 +427,7 @@ class AgentLoop:
             logger.info("tool_execution_completed", tool_name=tool_name, duration_ms=duration_ms)
 
             # ── Post-hooks: 执行后自动验证喵~ ──
-            if self._hook_registry is not None and rv.get("success", True):
+            if self._hook_registry is not None:
                 for hook in self._hook_registry.get_post_hooks(tool_name):
                     if hook.auto:
                         hook_result = await self._execute_hook(hook, tool_input)
