@@ -16,11 +16,14 @@ _VLM_TOOLS = {"observe", "locate"}
 
 # 默认内置钩子规则 — 经验文件不存在时使用
 _BUILTIN_HOOKS = [
-    ("move_robot_xyz", "pre", "observe", "拍摄工作区当前状态，确认目标位置和无障碍物"),
-    ("move_robot_xyz", "post", "observe", "移到新位置后，观察当前位置和状态是否符合预期"),
-    ("move_robot_joints", "pre", "observe", "当前视野是否清楚看到工作区"),
-    ("servo_gripper_control", "post", "observe", "夹爪闭合后，拍一张照片确认物体是否在夹爪中"),
-    ("control_suction", "post", "observe", "吸盘开启后，拍一张照片确认物体是否被吸附"),
+    ("move_robot_xyz", "pre", "observe", "拍摄工作区，确认目标位置和路径无障碍物"),
+    ("move_robot_xyz", "post", "observe", "移到新位置后，确认位置是否符合预期"),
+    ("move_robot_joints", "pre", "observe", "确认当前视野清楚，能看到工作区"),
+    ("move_robot_joints", "post", "observe", "移动后，确认视野是否正确"),
+    ("servo_gripper_control", "pre", "observe", "确认摄像头对准桌面，能看到目标物体"),
+    ("servo_gripper_control", "post", "observe", "夹爪闭合后，确认物体是否在夹爪中"),
+    ("control_suction", "pre", "observe", "确认摄像头对准桌面，能看到目标物体"),
+    ("control_suction", "post", "observe", "吸盘开启后，确认物体是否被吸附"),
 ]
 
 

@@ -172,7 +172,7 @@ class TestHookRegistry:
         from robocode.perception.hooks import HookRegistry
 
         hr = HookRegistry(hooks_file=Path("/nonexistent/hooks.md"))
-        assert hr.hook_count == 5  # 内置 5 条默认规则
+        assert hr.hook_count == 8  # 内置 8 条默认规则
 
 
 # ── CaptureResult 测试 ─────────────────────────────────────────────────
