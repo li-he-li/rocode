@@ -1,5 +1,5 @@
 ---
-updated: 2026-05-26
+updated: 2026-05-27
 ---
 
 # Robocode 开发索引
@@ -20,6 +20,7 @@ updated: 2026-05-26
 | 双层经验系统层1 — ToolGuard 自动注入 | ✅ 完成 | 工具调用时自动推送 @tool_name 关联经验，7个工具 × 33条标注 |
 | 经验质量保障 — 衰减/冲突/仪表盘 | ✅ 完成 | 置信度衰减+使用回涨 + 三段冲突检测 + 质量仪表盘 |
 | 全量测试 | ✅ 通过 | 419/419 全部通过（2026-05-26 更新） |
+| VLM 感知模块 | ✅ 完成 | 24/24 tests 全绿（2026-05-27 更新） |
 
 ## 模块地图
 
@@ -103,6 +104,8 @@ experience/
 | `harness` `7-gates` `gate-review` | [reviews/05-26-gates](04-reviews/2026-05-26-harness-gates.md) |
 | `experience` `tool-guard` `reader-agent` `dual-layer` | [design/05-21](05-design/dual-layer-experience-system.md) |
 | `review` `experience` `dual-layer` `quality` `verification` | [reviews/05-26](04-reviews/2026-05-26.md) |
+| `vlm` `perception` `3d` `locate` | [tests/05-27](03-tests/2026-05-27.md) [changelog/05-27](01-changelog/2026-05-27.md) |
+| `vlm` `hooks` `bugfix` `message-format` | [debug/05-27](02-debug/2026-05-27.md) |
 
 ## 时间线
 
@@ -135,6 +138,8 @@ experience/
 | 2026-05-26 | **经验质量保障**：置信度衰减(-0.01)+使用回涨(+0.02) + 三段冲突检测(>75%/55-75%/<55%) + 质量仪表盘 |
 | 2026-05-26 | **驭工程7-Gate门控审查**：4 PASS / 3 PARTIAL / 0 FAIL，P0×1（运动非幂等resume风险） |
 | 2026-05-26 | **双层经验系统层1功能审查**：419 tests 全绿，工具索引9个工具，bullet标签覆盖完整，代码质量良好 |
+| 2026-05-27 | **VLM 感知模块完成**：camera_bridge + VlmPerception + FakeVlmPerception + HookRegistry，24 tests 全绿 |
+| 2026-05-27 | **Hook 消息格式修复**：tool message → user 消息注入，解决 LLM API 400 错误 |
 
 ## 已知问题 / 待办
 

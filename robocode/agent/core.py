@@ -381,11 +381,11 @@ class AgentLoop:
             for hook in self._hook_registry.get_pre_hooks(tool_name):
                 if hook.auto:
                     hook_result = await self._execute_hook(hook, tool_input)
-                    self.context.add_tool_result(
-                        f"hook-pre-{tool_name}-{hook.action}",
-                        hook.action,
-                        json.dumps(hook_result, ensure_ascii=False),
+                    # 用 user 消息注入 hook 结果，避免违反 tool message 格式规范喵~
+                    hook_msg = (
+                        f"[{hook.action} 预检结果] {json.dumps(hook_result, ensure_ascii=False)}"
                     )
+                    self.context.add_message("user", hook_msg)
 
         # Physics capture before (L1/L2 only)
         before_snapshot = None
@@ -424,11 +424,9 @@ class AgentLoop:
                 for hook in self._hook_registry.get_post_hooks(tool_name):
                     if hook.auto:
                         hook_result = await self._execute_hook(hook, tool_input)
-                        self.context.add_tool_result(
-                            f"hook-post-{tool_name}-{hook.action}",
-                            hook.action,
-                            json.dumps(hook_result, ensure_ascii=False),
-                        )
+                        # 用 user 消息注入 hook 结果，避免违反 tool message 格式规范喵~
+                        hook_msg = f"[{hook.action} 验证结果] {json.dumps(hook_result, ensure_ascii=False)}"
+                        self.context.add_message("user", hook_msg)
 
             # Record to audit DB (with call flow context)
             if self.guard is not None:
