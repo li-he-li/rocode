@@ -184,7 +184,25 @@ async def _run_exp_manage(app):
     if index_path.exists():
         experience_index = index_path.read_text(encoding="utf-8")
 
-    # ── 保存经验管家收到的原始数据到 .temp/exp-reflector/ 喵~ ──
+    # ── Step 2: LLM 反思 ──
+    reflector_results: list[dict] = []
+    if has_data:
+        try:
+            reflector = Reflector(provider=app.agent.provider, max_bullets=10)
+            reflector_results = await reflector.reflect(
+                transcript=transcript,
+                physics=physics,
+                annotations=annotations,
+                call_flows=call_flows,
+                conv_analysis=conv_analysis,
+                experience_index=experience_index,
+            )
+            if reflector_results:
+                app.console.print(f"[dim]💡 反思产出 {len(reflector_results)} 条洞察[/dim]")
+        except Exception:
+            app.console.print("[dim]⚠ LLM 反思失败，跳过反思层[/dim]")
+
+    # ── 经验管家处理完成后保存数据到 .temp/exp-reflector/ 喵~ ──
     if has_data:
         import json as _json
         import time as _time
@@ -204,27 +222,10 @@ async def _run_exp_manage(app):
             "conv_analysis": conv_analysis,
             "feedback": feedback,
             "experience_index_chars": len(experience_index),
+            "reflector_results": reflector_results,
         }
         dump_file.write_text(_json.dumps(dump_data, ensure_ascii=False, indent=2), encoding="utf-8")
         app.console.print(f"[dim]📁 经验数据已保存到 {dump_file}[/dim]")
-
-    # ── Step 2: LLM 反思 ──
-    reflector_results: list[dict] = []
-    if has_data:
-        try:
-            reflector = Reflector(provider=app.agent.provider, max_bullets=10)
-            reflector_results = await reflector.reflect(
-                transcript=transcript,
-                physics=physics,
-                annotations=annotations,
-                call_flows=call_flows,
-                conv_analysis=conv_analysis,
-                experience_index=experience_index,
-            )
-            if reflector_results:
-                app.console.print(f"[dim]💡 反思产出 {len(reflector_results)} 条洞察[/dim]")
-        except Exception:
-            app.console.print("[dim]⚠ LLM 反思失败，跳过反思层[/dim]")
 
     # ── Step 3: 写入 ──
     if has_data:
