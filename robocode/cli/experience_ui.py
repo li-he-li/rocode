@@ -184,54 +184,29 @@ async def _run_exp_manage(app):
     if index_path.exists():
         experience_index = index_path.read_text(encoding="utf-8")
 
-    # ── 观测：输出经验管家收到的原始数据喵~ ──
-    from rich.panel import Panel
-    from rich.pretty import Pretty
+    # ── 保存经验管家收到的原始数据到 .temp/exp-reflector/ 喵~ ──
+    if has_data:
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
 
-    app.console.print(Panel("[bold cyan]经验管家收到的数据[/bold cyan]", style="cyan"))
+        dump_dir = _Path(".temp/exp-reflector")
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        dump_file = dump_dir / f"{ts}.json"
 
-    # transcript
-    app.console.print(f"[bold]transcript[/bold] ({len(transcript or [])} 条):")
-    if transcript:
-        for i, msg in enumerate(transcript[-5:]):  # 只显示最后5条
-            role = msg.get("role", "?")
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                preview = content[:200] + "..." if len(content) > 200 else content
-            else:
-                preview = str(content)[:200]
-            app.console.print(f"  [{i}] {role}: {preview}")
-    else:
-        app.console.print("  (空)")
-
-    # physics
-    app.console.print(f"\n[bold]physics[/bold]: {bool(physics)}")
-    if physics:
-        app.console.print(Pretty(physics, max_depth=2))
-
-    # annotations
-    app.console.print(f"\n[bold]annotations[/bold]: {bool(annotations)}")
-    if annotations:
-        for cat, data in annotations.items():
-            app.console.print(f"  {cat}: {data}")
-
-    # call_flows
-    app.console.print(f"\n[bold]call_flows[/bold]: {bool(call_flows)}")
-    if call_flows:
-        app.console.print(Pretty(call_flows, max_depth=2))
-
-    # conv_analysis
-    app.console.print(f"\n[bold]conv_analysis[/bold]: {bool(conv_analysis)}")
-    if conv_analysis:
-        app.console.print(Pretty(conv_analysis, max_depth=2))
-
-    # feedback
-    app.console.print(f"\n[bold]feedback[/bold]: {feedback or '(空)'}")
-
-    # experience_index
-    app.console.print(f"\n[bold]experience_index[/bold]: {len(experience_index)} 字符")
-
-    app.console.print(Panel("[bold cyan]数据采集完成，开始 LLM 反思...[/bold cyan]", style="cyan"))
+        dump_data = {
+            "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+            "transcript": transcript or [],
+            "physics": physics,
+            "annotations": annotations,
+            "call_flows": call_flows,
+            "conv_analysis": conv_analysis,
+            "feedback": feedback,
+            "experience_index_chars": len(experience_index),
+        }
+        dump_file.write_text(_json.dumps(dump_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        app.console.print(f"[dim]📁 经验数据已保存到 {dump_file}[/dim]")
 
     # ── Step 2: LLM 反思 ──
     reflector_results: list[dict] = []
