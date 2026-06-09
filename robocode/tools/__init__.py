@@ -1,3 +1,5 @@
+"""工具模块 — 注册中心 + 运动/夹爪/脚本/代码/补丁/Wrapper 工具喵~"""
+
 from robocode.tools.registry import ToolRegistry, ToolEntry, SkillEntry
 from robocode.tools.motion_tools import make_motion_tools
 from robocode.tools.gripper_tools import make_gripper_tools

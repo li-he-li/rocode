@@ -11,6 +11,9 @@ build/
 .temp/
 log/
 
+# Experience history backups (auto-generated)
+robocode/experience/_history/
+
 # Environment
 .env
 .venv/
@@ -20,6 +23,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .claude/
+.vscode/
 
 # Planning & reference docs
 openspec/
@@ -33,6 +37,7 @@ student_ros.zip
 src/student_ros/.git/
 src/student_ros/wheelhouse/
 src/student_ros/docs/
+src/student_ros/install/
 src/6D/__MACOSX/
 
 # Large data & models

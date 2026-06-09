@@ -1,4 +1,4 @@
-"""Motion and status tools — wrapped SDK calls with safety checks."""
+"""运动与状态工具 — SDK 调用 + 安全检查的封装喵~"""
 
 from robocode.backends.base import RobotBackend
 from robocode.orchestrator.safety import SafetyPolicy
@@ -6,12 +6,15 @@ from robocode.utils.models import ToolResult
 
 
 def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
+    """构建运动控制工具 handler 映射喵~"""
     _is_fake = getattr(backend, "is_fake", False)
 
     def _dry(msg: str) -> str:
-        return f"[DRY-RUN] {msg}" if _is_fake else msg
+        """Fake 模式前缀标记喵~"""
+        return f"[模拟模式-非真实硬件] {msg}" if _is_fake else msg
 
     def get_robot_status(**kwargs):
+        """查询机械臂当前状态喵~"""
         s = backend.get_status()
         return ToolResult(
             success=s.connected,
@@ -25,13 +28,10 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         ).model_dump(mode="json")
 
     def move_robot_home(**kwargs):
+        """回 Home 零位 [260, 0, 200]mm 喵~"""
         checks = safety.check_operation(
             "move_robot_home",
-            {
-                "x": 260.0,
-                "y": 0.0,
-                "z": 200.0,
-            },
+            {"x": 260.0, "y": 0.0, "z": 200.0},
         )
         failed = [c for c in checks if not c.passed]
         if failed:
@@ -44,14 +44,10 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         )
 
     def move_robot_xyz(*, x, y, z, speed_ratio=0.5, rotation=(180, 0, 90), **kwargs):
+        """笛卡尔空间移动到 (x, y, z) mm 喵~"""
         checks = safety.check_operation(
             "move_robot_xyz",
-            {
-                "x": x,
-                "y": y,
-                "z": z,
-                "speed_ratio": speed_ratio,
-            },
+            {"x": x, "y": y, "z": z, "speed_ratio": speed_ratio},
         )
         failed = [c for c in checks if not c.passed]
         if failed:
@@ -68,6 +64,7 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         ).model_dump(mode="json")
 
     def move_robot_joints(*, angles, speed_ratio=0.5, **kwargs):
+        """关节空间移动到指定角度 (度) 喵~"""
         angles = [float(a) for a in angles]
         joint_check = safety.check_joint_limits(angles)
         if not joint_check.passed:
@@ -83,12 +80,12 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         ).model_dump(mode="json")
 
     def move_path(*, waypoints, speed_ratio=0.5, rotation=(180, 0, 90), **kwargs):
-        """Execute a continuous path through multiple waypoints using linear moves.
+        """连续路径运动 — 多路点直线插值，消除多步停顿喵~
 
         Args:
-            waypoints: list of [x, y, z] positions in mm
-            speed_ratio: speed factor 0.0-1.0
-            rotation: end-effector orientation [rx, ry, rz] in degrees
+            waypoints: [[x, y, z], ...] 路点列表 (mm)
+            speed_ratio: 速度因子 0.0-1.0
+            rotation: 末端姿态 [rx, ry, rz] (度)
         """
         if not waypoints:
             return ToolResult(success=False, message="waypoints 为空").model_dump(mode="json")
@@ -126,7 +123,8 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
             return ToolResult(
                 success=len(errors) < len(waypoints),
                 message=_dry(
-                    f"路径完成 {len(waypoints) - len(errors)}/{len(waypoints)} 点, 错误: {'; '.join(errors[:3])}"
+                    f"路径完成 {len(waypoints) - len(errors)}/{len(waypoints)} 点"
+                    f", 错误: {'; '.join(errors[:3])}"
                 ),
             ).model_dump(mode="json")
 
@@ -136,10 +134,12 @@ def make_motion_tools(backend: RobotBackend, safety: SafetyPolicy) -> dict:
         ).model_dump(mode="json")
 
     def emergency_stop(**kwargs):
+        """立即急停喵~"""
         backend.emergency_stop(True)
         return ToolResult(success=True, message=_dry("已急停")).model_dump(mode="json")
 
     def release_emergency_stop(**kwargs):
+        """解除急停喵~"""
         backend.emergency_stop(False)
         return ToolResult(success=True, message=_dry("已解除急停")).model_dump(mode="json")
 

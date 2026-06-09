@@ -1,4 +1,4 @@
-"""Process orchestration — script inventory, detection, grasp tools."""
+"""流程编排 — 脚本清单、标定/检测/抓取工具喵~"""
 
 import json
 import time
@@ -12,17 +12,17 @@ CALIB_DIR = _PROJECT_ROOT / "src/student_ros/src/episode_apps/calibration_script
 ROOT_DIR = _PROJECT_ROOT / "src"
 D6_DIR = ROOT_DIR / "6D/6D/6d"
 
-# ── Script Inventory (9.1-9.2) ──────────────────────────────────────
+# ── 脚本清单 ──────────────────────────────────────────────────────
 
 SCRIPT_INVENTORY = [
-    # 6D calibration scripts
+    # ── 6D 标定脚本 ──
     {
         "name": "6d_calibration_teach",
         "path": str(D6_DIR / "0.teach_mode.py"),
         "category": "calibration",
         "requires_human": True,
         "output_files": [str(D6_DIR / "motors_degrees.npy")],
-        "description": "6D标定 Step 0: 示教采集点（人工自由移动机械臂记录位姿）",
+        "description": "6D标定 Step 0: 示教采集点（人工自由拖拽机械臂记录位姿）",
     },
     {
         "name": "6d_calibration_collect",
@@ -110,7 +110,10 @@ SCRIPT_INVENTORY = [
 
 
 def make_script_tools() -> dict:
+    """构建脚本/检测/抓取工具 handler 映射喵~"""
+
     def check_calibration_status(*, calib_type="hand_eye", **kwargs):
+        """检查标定文件是否存在且包含有效变换矩阵喵~"""
         file_map = {
             "hand_eye": CALIB_DIR / "hand_eye_calibration.yaml",
             "perspective": CALIB_DIR / "camera_calibration.yaml",
@@ -144,6 +147,7 @@ def make_script_tools() -> dict:
         ).model_dump(mode="json")
 
     def run_script(*, script_name, args="", **kwargs):
+        """启动标定/检测脚本 — 需人工的脚本仅返回启动指令，自动脚本在 conda episode 中执行喵~"""
         t0 = time.perf_counter()
         entry = next((s for s in SCRIPT_INVENTORY if s["name"] == script_name), None)
         if not entry:
@@ -152,12 +156,13 @@ def make_script_tools() -> dict:
                 message=f"未知脚本: {script_name}。可用: {[s['name'] for s in SCRIPT_INVENTORY]}",
             ).model_dump(mode="json")
         if entry["requires_human"]:
+            # 需人工操作的脚本 — 只返回启动指令，不自动执行喵~
             return ToolResult(
                 success=False,
                 message=f"脚本 {script_name} 需要操作者在 GUI 上手动操作。启动: python {entry['path']}",
                 metrics={"script": script_name, "requires_human": True, "path": entry["path"]},
             ).model_dump(mode="json")
-        # Auto-execute non-human scripts (always in conda episode)
+        # 自动脚本 — 经由 conda episode 执行
         cmd = [
             "conda",
             "run",
@@ -196,7 +201,7 @@ def make_script_tools() -> dict:
             return ToolResult(success=False, message=f"脚本执行异常: {e}").model_dump(mode="json")
 
     def grasp_6d(*, instruction, **kwargs):
-        """Execute 6D grasp via run_grasp.py — VLM detect + GraspNet + IK + execute."""
+        """6D 抓取 — VLM 检测 + GraspNet 规划 + IK 执行喵~"""
         t0 = time.perf_counter()
         script = ROOT_DIR / "6D/6D/graspnet-baseline/run_grasp.py"
         if not script.exists():
@@ -214,14 +219,9 @@ def make_script_tools() -> dict:
                 str(script.resolve()),
                 instruction,
             ]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             duration_ms = (time.perf_counter() - t0) * 1000
-            # Parse JSON result from run_grasp.py
+            # 解析 run_grasp.py 的 JSON 输出（取 stdout 最后一行）
             try:
                 result = (
                     json.loads(proc.stdout.strip().split("\n")[-1]) if proc.stdout.strip() else {}

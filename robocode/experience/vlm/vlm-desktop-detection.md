@@ -1,12 +1,12 @@
 ---
 type: operational
 tags: [vlm, desktop-detection, code]
-confidence: 0.83
+confidence: 0.85
 description: "RealSense拍照→VLM识别物体的完整流程、API Key管理、conda环境、脚本写入方式"
 data_points: 61
 sources: ad9f29b9877a
 created: 2026-05-20
-updated: 2026-05-21
+updated: 2026-05-27
 refs: ""
 success: True
 ---

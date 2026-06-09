@@ -83,8 +83,8 @@ class ExperienceReader:
         )
         return "\n".join(lines)
 
-    def get_tool_tips(self, tool_name: str, max_tips: int = 3) -> list[str]:
-        """返回与该工具关联的经验提醒（最多 max_tips 条），同时记录使用。"""
+    def get_tool_tips(self, tool_name: str, max_tips: int = 1) -> list[str]:
+        """返回与该工具关联的经验提醒（最多 max_tips 条，默认1条以控制上下文长度喵~），同时记录使用。"""
         tips = self._tool_tips.get(tool_name, [])
         sources = self._tip_source_files.get(tool_name, [])
         for rel_path in sources[:max_tips]:

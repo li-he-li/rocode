@@ -1,10 +1,10 @@
 ---
 type: hooks
 tags: [vlm, hooks, perception]
-confidence: 0.85
+confidence: 0.84
 description: "VLM 感知钩子规则 — 工具调用的前置/后置自动观察"
 created: 2026-05-26
-updated: 2026-05-26
+updated: 2026-05-27
 ---
 
 # VLM 感知钩子规则

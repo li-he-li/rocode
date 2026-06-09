@@ -1,7 +1,7 @@
-"""Patch editing tools — workspace-limited patch application, diff summary, check runner.
+"""补丁编辑工具 — 工作空间受限的补丁应用、diff 摘要、代码检查喵~
 
-Phase 2 code evolution: the agent can propose patches, the system validates and applies
-them only within workspace roots, never touching protected files without explicit approval.
+Phase 2 代码演化: Agent 可提议补丁，系统验证后在允许的工作空间内应用，
+受保护文件需显式审批。
 """
 
 import re
@@ -22,6 +22,7 @@ WORKSPACE_ROOTS = [
 
 
 def _resolve_inside_workspace(file_path: str) -> Path | None:
+    """解析路径并验证在工作空间内，否则返回 None 喵~"""
     p = Path(file_path)
     if not p.is_absolute():
         p = (_PROJECT_ROOT / p).resolve()
@@ -38,15 +39,17 @@ def _resolve_inside_workspace(file_path: str) -> Path | None:
 
 @dataclass
 class _Hunk:
+    """补丁块 — diff 中的一个 @@ ... @@ 区块喵~"""
+
     old_start: int
     old_count: int
     new_start: int
     new_count: int
-    lines: list[str] = field(default_factory=list)  # lines starting with ' ', '-', '+'
+    lines: list[str] = field(default_factory=list)  # 行首为 ' ', '-', '+' 的行
 
 
 def _parse_patch(patch_text: str) -> dict | None:
-    """Parse unified diff. Returns {path, hunks: [{old_start, old_count, new_start, new_count, lines}]} or None."""
+    """解析 unified diff 格式的补丁文本喵~"""
     lines = patch_text.splitlines()
     hunk_header = re.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
 
@@ -85,38 +88,39 @@ def _parse_patch(patch_text: str) -> dict | None:
 
 
 def _apply_hunks(original_lines: list[str], hunks: list[_Hunk]) -> list[str] | None:
-    """Apply hunks to original lines. Returns modified lines or None on mismatch."""
-    result = list(original_lines)
-    # Apply hunks in reverse order to keep line numbers stable
-    for hunk in reversed(hunks):
-        old_start = hunk.old_start - 1  # 0-based
-        old_count = hunk.old_count
+    """将补丁块应用到原始行，失败返回 None 喵~
 
-        # Extract context + deletions from hunk lines
+    从后往前应用以保持行号稳定性。
+    """
+    result = list(original_lines)
+    for hunk in reversed(hunks):
+        old_start = hunk.old_start - 1  # 转为 0-based
+
+        # 提取上下文+删除行
         expected_old = []
         new_lines = []
         for hline in hunk.lines:
-            if hline[0] == " ":
+            if hline[0] == " ":  # 上下文行
                 expected_old.append(hline[1:])
                 new_lines.append(hline[1:])
-            elif hline[0] == "-":
+            elif hline[0] == "-":  # 删除行
                 expected_old.append(hline[1:])
-            elif hline[0] == "+":
+            elif hline[0] == "+":  # 新增行
                 new_lines.append(hline[1:])
 
-        # Verify old content matches
+        # 验证原始内容匹配
         actual_old = result[old_start : old_start + len(expected_old)]
         if actual_old != expected_old:
             return None
 
-        # Replace: remove old range, insert new lines
-        result[old_start : old_start + old_count] = new_lines
+        # 替换: 删除 old 范围，插入新行
+        result[old_start : old_start + hunk.old_count] = new_lines
 
     return result
 
 
 def generate_diff_summary(patch_text: str) -> dict:
-    """Parse a unified diff and return a structured summary."""
+    """解析 unified diff 并返回结构化摘要喵~"""
     parsed = _parse_patch(patch_text)
     if parsed is None:
         return {"valid": False, "error": "无法解析补丁格式"}
@@ -140,9 +144,9 @@ def generate_diff_summary(patch_text: str) -> dict:
 
 
 def apply_patch(*, patch_text: str, target_file: str, **kwargs) -> dict:
-    """Apply a unified diff patch to a file within workspace roots.
+    """在工作空间内应用 unified diff 补丁喵~
 
-    Rejects: files outside workspace, protected files, non-existent targets.
+    拒绝: 路径超出工作空间、受保护文件、目标不存在、上下文不匹配。
     """
     resolved = _resolve_inside_workspace(target_file)
     if resolved is None:
@@ -164,7 +168,6 @@ def apply_patch(*, patch_text: str, target_file: str, **kwargs) -> dict:
             message=f"目标文件不存在: {target_file}",
         ).model_dump(mode="json")
 
-    # Parse the patch
     parsed = _parse_patch(patch_text)
     if parsed is None:
         return ToolResult(
@@ -172,11 +175,9 @@ def apply_patch(*, patch_text: str, target_file: str, **kwargs) -> dict:
             message="补丁格式无效，无法解析",
         ).model_dump(mode="json")
 
-    # Read original file
     original = resolved.read_text(encoding="utf-8")
     original_lines = original.splitlines()
 
-    # Apply hunks
     modified = _apply_hunks(original_lines, parsed["hunks"])
     if modified is None:
         return ToolResult(
@@ -185,11 +186,9 @@ def apply_patch(*, patch_text: str, target_file: str, **kwargs) -> dict:
             metrics={"target_file": target_file},
         ).model_dump(mode="json")
 
-    # Write back
     result_text = "\n".join(modified) + "\n"
     resolved.write_text(result_text, encoding="utf-8")
 
-    # Generate summary
     summary = generate_diff_summary(patch_text)
     return ToolResult(
         success=True,
@@ -204,7 +203,7 @@ def apply_patch(*, patch_text: str, target_file: str, **kwargs) -> dict:
 
 
 def run_checks(*, file_path: str, **kwargs) -> dict:
-    """Run import and syntax checks on a Python file. Reports errors, never installs deps."""
+    """对 Python 文件运行语法检查 + 导入检查，绝不安装依赖喵~"""
     p = Path(file_path)
     if not p.is_absolute():
         p = (_PROJECT_ROOT / p).resolve()
@@ -219,23 +218,20 @@ def run_checks(*, file_path: str, **kwargs) -> dict:
 
     results = {}
 
-    # Syntax check via compile
+    # 语法检查 — Python compile
     try:
         source = p.read_text(encoding="utf-8")
         compile(source, str(p), "exec")
         results["syntax_check"] = {"passed": True, "error": ""}
     except SyntaxError as e:
-        results["syntax_check"] = {
-            "passed": False,
-            "error": f"行 {e.lineno}: {e.msg}",
-        }
+        results["syntax_check"] = {"passed": False, "error": f"行 {e.lineno}: {e.msg}"}
         results["import_check"] = {"passed": False, "error": "语法错误，跳过导入检查"}
         return results
     except Exception as e:
         results["syntax_check"] = {"passed": False, "error": str(e)}
         return results
 
-    # Import check via subprocess (isolated)
+    # 导入检查 — 子进程隔离执行
     try:
         proc = subprocess.run(
             [
@@ -262,6 +258,7 @@ def run_checks(*, file_path: str, **kwargs) -> dict:
 
 
 def make_patch_tools() -> dict:
+    """返回补丁工具 handler 映射喵~"""
     return {
         "apply_patch": apply_patch,
         "generate_diff_summary": generate_diff_summary,

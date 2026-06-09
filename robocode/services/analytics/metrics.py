@@ -1,6 +1,6 @@
-"""Lightweight in-process metrics collector.
+"""轻量进程内指标采集器 — 计数器和延迟直方图喵~
 
-Accumulates counters and samples in memory, flushes to AuditDB on demand.
+内存中累积，按需刷新到 AuditDB。
 """
 
 import time
@@ -10,12 +10,12 @@ from collections import defaultdict
 
 
 class MetricsCollector:
-    """Process-internal metrics: counters, latency histograms, event samples.
+    """进程内指标: 计数器 + 延迟直方图 + 语音指标喵~
 
     Usage:
         metrics = MetricsCollector()
         with metrics.timer("tool_execution", tool_name="move_xyz"):
-            ...  # timed block
+            ...  # 计时块
 
         metrics.record("safety_rejection", reason="joint_limit")
         summary = metrics.session_summary()
@@ -27,28 +27,28 @@ class MetricsCollector:
         self._latencies: dict[str, list[float]] = defaultdict(list)
         self._started_at = time.time()
 
-        # Voice-specific metrics
+        # 语音专属指标
         self._stt_latency_ms: list[float] = []
         self._stt_confidence: list[float] = []
         self._stt_failure_total = 0
         self._voice_op_total = 0
         self._voice_op_success = 0
 
-    # ── public API ───────────────────────────────────────────────────
+    # ── 公共 API ──────────────────────────────────────────────────
 
     def record(self, metric: str, value: int = 1):
-        """Increment a counter metric."""
+        """计数器 +1（或指定值）喵~"""
         with self._lock:
             self._counters[metric] += value
 
     def record_latency(self, metric: str, latency_ms: float):
-        """Record a latency sample."""
+        """记录一条延迟样本喵~"""
         with self._lock:
             self._latencies[metric].append(latency_ms)
 
     @contextmanager
     def timer(self, metric: str, **tags):
-        """Context manager that records elapsed time.
+        """上下文管理器 — 自动计时代码块喵~
 
         with metrics.timer("tool_execution", tool_name="move_xyz"):
             do_work()
@@ -69,9 +69,10 @@ class MetricsCollector:
         with self._lock:
             return list(self._latencies.get(metric, []))
 
-    # ── voice metrics ────────────────────────────────────────────────
+    # ── 语音指标 ──────────────────────────────────────────────────
 
     def record_stt_result(self, latency_ms: float, confidence: float, success: bool):
+        """记录语音转文字结果喵~"""
         with self._lock:
             self._voice_op_total += 1
             if success:
@@ -81,9 +82,10 @@ class MetricsCollector:
             else:
                 self._stt_failure_total += 1
 
-    # ── session summary ──────────────────────────────────────────────
+    # ── 会话摘要 ──────────────────────────────────────────────────
 
     def session_summary(self) -> dict:
+        """生成会话级指标摘要喵~"""
         with self._lock:
             lats = self._stt_latency_ms
             confs = self._stt_confidence

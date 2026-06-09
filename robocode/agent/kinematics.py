@@ -1,61 +1,64 @@
-"""Forward kinematics for Episode 6-axis arm — pure math, no SDK required.
+"""Episode 六轴机械臂正运动学 — 纯数学计算，不依赖 SDK 喵~
 
-Computes end-effector position and camera direction from 6 joint angles
-using the URDF origin parameters from episode1-spec.md.
+根据 6 个关节角度，用 episode1-spec.md 中的 URDF 参数
+计算末端执行器位置和摄像头方向。
 """
 
 import math
 
 
-# URDF origin data: (x, y, z) in meters, converted to mm
-# Joint axis direction: ±Z
+# URDF 连杆参数: (旋转轴方向, origin_x, origin_y, origin_z) 单位 mm
+# 旋转轴方向: +1 表示 +Z 轴, -1 表示 -Z 轴
 _LINKS = [
-    # (axis_sign, origin_mm_x, origin_mm_y, origin_mm_z)
-    (+1, 5.5, -2.0, 166.0),  # J1: axis +Z, link to J2
-    (-1, 0.0, 200.0, 0.0),  # J2: axis -Z, link 200mm to J3
-    (-1, 0.0, -5.6, -2.0),  # J3→J4 (offset from J3)
-    (-1, 0.0, 0.0, -192.0),  # J4→J5, link 192mm
-    (-1, -5.5, 0.0, 0.0),  # J5→J6, link 55mm
-    (+1, 0.0, 0.0, 0.0),  # J6: axis +Z, end flange
+    # (轴方向, origin_x_mm, origin_y_mm, origin_z_mm)
+    (+1, 5.5, -2.0, 166.0),  # J1: 底座旋转 (+Z), 连到 J2
+    (-1, 0.0, 200.0, 0.0),  # J2: 大臂俯仰 (-Z), 连杆长 200mm
+    (-1, 0.0, -5.6, -2.0),  # J3→J4 (J3 偏移)
+    (-1, 0.0, 0.0, -192.0),  # J4→J5, 连杆长 192mm
+    (-1, -5.5, 0.0, 0.0),  # J5→J6, 连杆长 55mm
+    (+1, 0.0, 0.0, 0.0),  # J6: 末端法兰 (+Z)
 ]
 
 
 def _rot_z(angle_deg: float) -> list[list[float]]:
-    """3x3 rotation matrix around Z axis by angle in degrees."""
+    """绕 Z 轴旋转 angle_deg 度的 3x3 旋转矩阵喵~"""
     a = math.radians(angle_deg)
     c, s = math.cos(a), math.sin(a)
     return [[c, -s, 0], [s, c, 0], [0, 0, 1]]
 
 
 def fk(joints: list[float]) -> dict:
-    """Compute forward kinematics for 6 joint angles (degrees).
+    """Episode 6 轴正运动学喵~
 
-    Returns dict with:
-      - position: [x, y, z] in mm
-      - rotation: 3x3 rotation matrix (world frame)
-      - camera_dir: unit vector of camera pointing direction (end Z axis)
-      - rx, ry, rz: Euler angles in degrees (ZYX order, matching SDK convention)
+    Args:
+        joints: 6 个关节角度 (度)
+
+    Returns:
+        dict with:
+          - position: [x, y, z] mm (末端在基坐标系中的位置)
+          - rotation: 3x3 旋转矩阵 (世界坐标系下)
+          - camera_dir: 摄像头指向单位向量 (末端 Z 轴方向)
+          - rx, ry, rz: ZYX 欧拉角 (度, 与 SDK 一致)
     """
-    # Start from base — J1 origin is at (0,0,0)
-    R = _rot_z(0)  # identity
+    # 从基座开始 — J1 原点在 (0,0,0)
+    R = _rot_z(0)  # 初始化为单位矩阵
     p = [0.0, 0.0, 0.0]
 
     for i, angle in enumerate(joints):
         sign, ox, oy, oz = _LINKS[i]
 
-        # Apply joint rotation
+        # 应用关节旋转
         Rj = _rot_z(sign * angle)
         R = _mat_mul(R, Rj)
 
-        # Translate along current X axis by origin offset
-        # (the origin is in the parent frame after rotation)
+        # 沿当前 X 轴平移 origin 偏移量
         offset = _mat_vec_mul(R, [ox, oy, oz])
         p = [p[j] + offset[j] for j in range(3)]
 
-    # Camera direction = end-effector Z axis = third column of rotation matrix
+    # 摄像头方向 = 末端 Z 轴 = 旋转矩阵第三列
     camera_dir = [R[0][2], R[1][2], R[2][2]]
 
-    # Euler ZYX
+    # ZYX 欧拉角提取
     rx, ry, rz = _rot_to_euler(R)
 
     return {
@@ -69,12 +72,12 @@ def fk(joints: list[float]) -> dict:
 
 
 def camera_facing(joints: list[float]) -> str:
-    """Return a human-readable camera direction from joint angles."""
+    """从关节角度推算摄像头朝向的人类可读描述喵~"""
     r = fk(joints)
     cd = r["camera_dir"]
     x, y, z = cd[0], cd[1], cd[2]
 
-    # Determine primary direction
+    # 判断主方向
     if z < -0.7:
         return "朝下"
     if z > 0.7:
@@ -88,7 +91,7 @@ def camera_facing(joints: list[float]) -> str:
     if x < -0.5:
         return "朝后"
 
-    # Mixed direction
+    # 混合方向 — 组合多个分量
     parts = []
     if x > 0.3:
         parts.append("前")
@@ -105,11 +108,11 @@ def camera_facing(joints: list[float]) -> str:
     return "朝" + "偏".join(parts) if parts else f"斜向(x={x:.2f},y={y:.2f},z={z:.2f})"
 
 
-# ── helpers ──────────────────────────────────────────────────────────
+# ── 矩阵运算辅助函数 ────────────────────────────────────────────────
 
 
 def _mat_mul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
-    """3x3 matrix multiplication."""
+    """3x3 矩阵乘法喵~"""
     return [
         [a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] for j in range(3)]
         for i in range(3)
@@ -117,7 +120,7 @@ def _mat_mul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
 
 
 def _mat_vec_mul(m: list[list[float]], v: list[float]) -> list[float]:
-    """3x3 matrix × 3-vector."""
+    """3x3 矩阵 × 3维向量喵~"""
     return [
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
         m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
@@ -126,9 +129,9 @@ def _mat_vec_mul(m: list[list[float]], v: list[float]) -> list[float]:
 
 
 def _rot_to_euler(r: list[list[float]]) -> tuple[float, float, float]:
-    """Extract ZYX Euler angles (degrees) from rotation matrix."""
+    """从旋转矩阵提取 ZYX 欧拉角 (度) 喵~"""
     sy = math.sqrt(r[0][0] ** 2 + r[1][0] ** 2)
-    singular = sy < 1e-6
+    singular = sy < 1e-6  # 万向节死锁检测
 
     if not singular:
         rx = math.degrees(math.atan2(r[2][1], r[2][2]))

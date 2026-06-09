@@ -2,11 +2,11 @@
 type: operational
 tags: [code, code-best-practices, motion, desktop-detection, vlm]
 confidence: 0.95
-description: "关节耦合规律、桌面检测流程、Z轴陷阱、J4/J5方向控制、臂展回收、速度上限、VLM脚本写入等 27 条核心规则"
+description: "关节耦合规律、桌面检测流程、Z轴陷阱、J4/J5方向控制、臂展回收、速度上限、VLM脚本写入等核心规则"
 data_points: 57
 sources: ""
 created: 2026-05-19
-updated: 2026-05-21
+updated: 2026-05-27
 refs: ""
 success: True
 ---
@@ -30,9 +30,8 @@ success: True
 - [Z轴平移|PATTERN] @move_robot_joints 保持朝下改高度：用 move_robot_joints 微调J2/J3来改变高度，根据RULE调整J5补偿朝向，或用SDK代码获取当前pose仅改z后整体发送
 - [代码执行|PATTERN] @execute_command SDK脚本须通过 conda run -n episode python3 执行
 - [代码执行|CAUTION] @execute_command @generate_and_run_sdk_code execute_command 禁止管道/重定向符(|;>`$>&<)，需复杂操作时用 generate_and_run_sdk_code
-- [保持朝下|RULE] @move_robot_joints J1=180（正前方）时，J2≈105、J3≈70、J5≈105.63 组合可实现桌面朝下，J5需随J2/J3增大而减小的补偿规律仍适用
 - [桌面检测|PATTERN] @get_robot_status @search_code @generate_and_run_sdk_code @execute_command 流程：get_robot_status → search_code(/read_file)经验 → generate_and_run_sdk_code写入脚本 → execute_command运行（conda run -n episode python3），不可用execute_command直接写或运行
-- [桌面检测|PARAM] 已验证桌面朝下姿态范围：J1≈180，J2∈[105,108]，J3∈[68,71]，J5∈[100,110]
+- [桌面检测|PARAM] 已验证桌面朝下姿态范围：J1≈180，J2∈[120,121]，J3∈[59,103]，J5∈[145,197]（来源：episode1-spec.md 硬件手册 FK 验证）
 - [代码执行|PARAM] VLM检测环境变量必须显式传入：`env=('DASHSCOPE_API_KEY=sk-...'`，否则api调用失败
 - [运动控制|CAUTION] @move_robot_joints move_robot_joints speed_ratio上限0.6，超过会报错但不会提示准确上限值（必须从经验中记住）
 - [桌面检测|CAUTION] @get_robot_status 用户手动调姿后必须调用get_robot_status记录最终关节值——这是唯一可靠的位姿记忆来源
@@ -48,5 +47,5 @@ success: True
 - [J4与左右方向] @move_robot_joints J4 控制水平方向（左右看），限位 [0,335]°，逆时针旋转；J1=180°正前方时，调整J4实现左/右，不影响朝下姿态
 - [J5与俯仰方向] @move_robot_joints J5 绕手腕固定点做俯仰转动，不改变末端位置：110°水平→130°微下→192°朝下→6°朝上
 - [J2/J3与高度前后] @move_robot_joints J2（肩关节，限位[0,180]°，90°水平）控制大臂抬起/放下，决定高度和前后大范围；J3（肘关节）连杆200mm，配合J2调节末端前后距离
-- [朝下看基准姿态] @move_robot_joints 已验证朝下组合：J2≈139°, J5≈85° 或 J2≈90°, J5≈192°；J1≈180°（正前），J3≈70~83°
+- [朝下看基准姿态] @move_robot_joints 已验证朝下组合：J2≈90°, J5≈192°, J1≈180°（正前），J3≈70~83°（来源：episode1-spec.md FK验证）
 - [学习方式] @get_robot_status 先执行动作（左右/上下看），再用 get_robot_status 确认角度，对比前后数据提炼规律，不要只记死值

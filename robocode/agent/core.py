@@ -27,65 +27,44 @@ def _summarize_params(params: dict, max_len: int = 80) -> str:
 SYSTEM_PROMPT = """你是一个专业的机器人控制助手，控制一台 Episode 6 轴机械臂。
 
 ## 运行环境
-- 所有 6D 标定和 6D 抓取操作必须通过 conda `episode` 环境执行
-- 工具内部已自动使用 `conda run -n episode`，你无需手动指定环境
-- 如需通过 execute_command 运行 6D 相关脚本，命令前加 `conda run -n episode python3`
-- Agent 本身运行在 .venv (Python 3.12)，不要混淆
+- 6D 标定/抓取通过 conda `episode` 环境执行，工具内部已自动处理
 
 ## 意图判断
 每轮对话首先判断用户意图：
-- CHAT: 闲聊问候、事实询问、概念解释，纯文本回应，不调工具
+- CHAT: 闲聊问候、概念解释，纯文本回应，不调工具
 - QUERY: 查询机器人状态、标定信息，调用 L0 只读工具
 - ACTION: 执行机器人动作，调用 L1/L2 工具（需要审批）
 - CODE: 现有工具无法满足时，编写 SDK 代码实现自定义动作
 
-## 6D 标定（6d_calibration）
-- 用途：标定相机→机械臂末端变换 T_camera2end，供 6D 抓取使用
-- 前提：RealSense D435 已连接、SDK Server 运行中、棋盘格标定板就位
-- 流程：示教(人工)→采集→计算→标定，共 4 步，需人工操作 GUI
-- 工具调用路径：用 run_script 或 /6d_calibration 斜杠命令
-- 执行时自动使用 conda episode 环境
-
-## 6D 抓取（6d_grasp）
-- 用途：自然语言指令驱动 VLM 检测 + GraspNet 规划 + IK 执行抓取
-- 前提：conda episode 环境、SDK Server、RealSense、T_camera2end.yaml 标定文件
-- 流程：VLM解析→采集检测→加载模型→GraspNet推理筛选→IK迭代执行放置
-- 工具调用：直接调用 6d_grasp(instruction="自然语言指令")
-- 观察位姿：抓取开始前机械臂自动移动到预设观察位姿
-- 执行时自动使用 conda episode 环境
+## 6D 标定与抓取
+- 6D 标定（6d_calibration）：标定 T_camera2end，4 步示教→采集→计算→标定，需人工操作 GUI
+- 6D 抓取（6d_grasp）：VLM 检测 + GraspNet 规划 + IK 执行，直接调用 6d_grasp(instruction="自然语言指令")
 
 ## VLM 视觉感知
+- **observe(prompt)**: 拍摄桌面并用 VLM 分析，返回结构化观察结果和后续建议。首次用宽泛 prompt，根据 suggestions 决定是否跟进第二轮
+- **locate(target)**: 定位物体返回 3D 坐标 (mm)，必须先 observe 确认物体在视野中再调用
+- 移动前 observe 确认无障碍，抓取/放置后 observe 验证结果
 
-你拥有视觉观察能力，通过以下工具感知工作区：
-- **observe(prompt)**: 拍摄桌面照片并用 VLM 分析。用自然语言描述想观察的内容，VLM 返回结构化观察结果和后续观察建议。
-- **locate(target)**: 定位特定物体，返回相机坐标系下的 3D 坐标 (mm)，可直接用于 move_robot_xyz。
+## 执行原则（硬约束）
+1. **先查后动**：任何移动/夹爪操作前，必须先调用 get_robot_status 确认状态。定位前必须先 observe
+2. **一步一验**：每轮只做一个动作，等结果返回并验证后再决定下一步。不要连续发送多个 tool_call
+3. **失败即停**：工具调用失败时汇报用户，不要自行多轮调试。连续操作无效果时停下来汇报当前状态
+4. **不盲猜**：不确定时主动提问澄清。不要假装执行了动作，必须等待工具返回结果"""
 
-### 多轮观察策略
-- 首次 observe 使用宽泛 prompt（如"列出工作区所有物体及其位置"）
-- 根据 VLM 返回的 suggestions 字段决定是否跟进第二轮观察
-- 如果 suggestions 不是 "sufficient"，按建议调整观察角度或 prompt 再次观察
-- 定位物体前先用 observe 确认物体在视野中，再用 locate 获取坐标
 
-### 观察时机
-- 移动机械臂前：observe 确认目标位置和无障碍物
-- 抓取后：observe 确认物体是否被成功抓取
-- 放置后：observe 确认物体已放置在正确位置
-- 不确定空间状态时：observe 获取视觉反馈，不要盲猜坐标
+# 重复调用检测白名单：这些工具允许连续多次调用喵~
+_DUPLICATE_WHITELIST = {"observe", "get_robot_status", "read_file", "search_code", "list_skills"}
 
-## 执行原则
-- 不确定时主动提问澄清，不要猜测
-- 抓取前先调用 get_robot_status 确认机器人状态
-- 工具调用失败时，把具体错误信息汇报给用户，不要自行调试多轮
-- 不要假装执行了动作，必须等待工具返回结果
-- 保持自然对话感，不要过于机械
-
-## 动作时序与状态验证（重要）
-1. **每轮只执行一个动作**：不要在同一轮对话中发送多个 tool_calls，一次只做一个动作，等结果返回并验证后再决定下一步
-2. **执行动作前必须先确认当前状态**：调用 `get_robot_status` 获取当前关节角度和末端姿态，确认是否适合执行目标动作
-3. **不要盲目重复发送动作**：如果刚执行完 `move_robot_joints`，必须等结果返回并验证状态后再决定下一步
-4. **动作后验证**：执行移动动作后，等待 post-hook 的 `observe` 验证结果，确认视野是否正确
-5. **VLM 结果优先**：如果 `observe` 返回了有效的桌面观察结果，不要立即改变姿态，应基于当前视野继续执行后续任务
-6. **分步执行**：调整姿态 → 等待验证 → 确认视野 → 再执行下一步，不要跳过验证步骤"""
+# 前置依赖映射：工具 → (前置工具, 缺失时的提醒文本) 喵~
+_PREREQUISITES: dict[str, tuple[str, str]] = {
+    "move_robot_xyz": ("get_robot_status", "请先调用 get_robot_status 确认机器人状态"),
+    "move_robot_joints": ("get_robot_status", "请先调用 get_robot_status 确认当前关节角度"),
+    "move_robot_home": ("get_robot_status", "请先调用 get_robot_status 确认机器人状态"),
+    "move_path": ("get_robot_status", "请先调用 get_robot_status 确认机器人状态"),
+    "locate": ("observe", "请先调用 observe 确认物体在视野中"),
+    "control_suction": ("get_robot_status", "请先调用 get_robot_status 确认机器人状态"),
+    "servo_gripper_control": ("get_robot_status", "请先调用 get_robot_status 确认机器人状态"),
+}
 
 
 class AgentLoop:
@@ -127,6 +106,11 @@ class AgentLoop:
         self._current_task_instruction: str | None = None
         self._system_prompt = self._build_system_prompt()
 
+        # ── 程序层硬约束状态 ──
+        self._turn_tool_history: list[str] = []  # 当前 turn 已调用工具列表
+        self._last_call_key: tuple | None = None  # (tool_name, param_hash)
+        self._last_call_count: int = 0  # 连续相同次数
+
     async def execute_tool(self, event: StreamEvent) -> dict:
         return await self._execute_tool(event)
 
@@ -136,10 +120,12 @@ class AgentLoop:
         self._current_task_instruction = user_input
         self._turn_number = 0
         self._prev_call_id = None
+        self._turn_tool_history = []
+        self._last_call_key = None
+        self._last_call_count = 0
         last_text = ""
 
         for iteration in range(self.max_iterations):
-            # Collect tool_uses so we can build the assistant message
             tool_uses: list[StreamEvent] = []
             reasoning_content = ""
 
@@ -180,33 +166,33 @@ class AgentLoop:
                     self._save_checkpoint()
                     return f"API 错误: {event.payload.get('message', 'unknown')}"
 
-            # After stream ends with tool_calls, record assistant message + execute tools
+            # 每轮只执行第一个工具，强制"一步一验证"喵~
+            # 剩余的 tool_use 被丢弃，下一轮 LLM 看到结果后自然会决定下一步
             if tool_uses:
                 self._state = OrchestratorState.EXECUTING
+                first = tool_uses[0]
                 assistant_tool_calls = [
                     {
-                        "id": tu.payload.get("id", ""),
+                        "id": first.payload.get("id", ""),
                         "type": "function",
                         "function": {
-                            "name": tu.payload.get("name", ""),
+                            "name": first.payload.get("name", ""),
                             "arguments": json.dumps(
-                                tu.payload.get("input", {}), ensure_ascii=False
+                                first.payload.get("input", {}), ensure_ascii=False
                             ),
                         },
                     }
-                    for tu in tool_uses
                 ]
                 self.context.add_assistant_message(
                     tool_calls=assistant_tool_calls, reasoning_content=reasoning_content
                 )
 
-                for tu in tool_uses:
-                    result = await self._execute_tool(tu)
-                    self.context.add_tool_result(
-                        tool_call_id=tu.payload.get("id", ""),
-                        tool_name=tu.payload.get("name", ""),
-                        result=json.dumps(result, ensure_ascii=False),
-                    )
+                result = await self._execute_tool(first)
+                self.context.add_tool_result(
+                    tool_call_id=first.payload.get("id", ""),
+                    tool_name=first.payload.get("name", ""),
+                    result=json.dumps(result, ensure_ascii=False),
+                )
 
         self.context.trim()
         self._state = OrchestratorState.FAILED
@@ -217,7 +203,7 @@ class AgentLoop:
 
     @classmethod
     def _load_hardware_spec(cls) -> str:
-        """Load episode1-spec.md content, cached at class level."""
+        """加载 episode1-spec.md，类级别缓存喵~"""
         if cls._HARDWARE_SPEC_CACHE is not None:
             return cls._HARDWARE_SPEC_CACHE
         from pathlib import Path
@@ -227,7 +213,6 @@ class AgentLoop:
         )
         try:
             raw = spec_path.read_text(encoding="utf-8")
-            # Strip YAML frontmatter if present
             if raw.startswith("---"):
                 end = raw.find("---", 3)
                 if end != -1:
@@ -239,11 +224,11 @@ class AgentLoop:
         return cls._HARDWARE_SPEC_CACHE
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with hardware spec + experience index appended."""
+        """构建 system prompt：核心 prompt + 硬件手册 + 经验目录喵~"""
         prompt = SYSTEM_PROMPT
         spec = self._load_hardware_spec()
         if spec:
-            prompt += "\n\n## 硬件手册（强制已知——回答任何关节/位姿问题前必须对照）\n\n" + spec
+            prompt += "\n\n## 硬件手册（强制已知——回答任何关节/位姿/方向问题前必须对照）\n\n" + spec
         if self._experience_reader is not None:
             summary = self._experience_reader.get_index_summary()
             if summary:
@@ -328,13 +313,77 @@ class AgentLoop:
             return []
         return self._experience_reader.get_tool_tips(tool_name)
 
-    async def _execute_hook(self, hook, tool_input: dict) -> dict:
-        """执行单个 hook: 调用 observe/locate handler，返回结果 dict 喵~
+    # ── 程序层硬约束：重复调用检测 ───────────────────────────────
 
-        Args:
-            hook: HookRule 实例（from robocode.perception.hooks）
-            tool_input: 原工具调用的参数字典（保留用于未来扩展，当前未使用）
+    @staticmethod
+    def _param_key(tool_name: str, tool_input: dict) -> str:
+        """提取工具参数的可哈希键，用于重复检测喵~"""
+        if tool_name == "move_robot_joints":
+            return json.dumps(tool_input.get("angles", []))
+        elif tool_name == "move_robot_xyz":
+            return json.dumps([tool_input.get(k) for k in ("x", "y", "z")])
+        elif tool_name == "execute_command":
+            return tool_input.get("command", "")
+        elif tool_name == "read_file":
+            return tool_input.get("path", "")
+        elif tool_name == "locate":
+            return tool_input.get("target", "")
+        elif tool_name == "control_suction":
+            return tool_input.get("action", "")
+        elif tool_name == "servo_gripper_control":
+            return str(tool_input.get("angle", ""))
+        else:
+            return json.dumps(tool_input, sort_keys=True)
+
+    def _check_duplicate_call(self, tool_name: str, tool_input: dict) -> dict | None:
+        """检测连续重复调用，返回 {"block": bool, "msg": str} 或 None 喵~
+
+        第 1 次：放行 (None)
+        第 2 次：放行 + 追加警告
+        第 3+ 次：拦截返回错误
+        白名单工具不检测。
         """
+        if tool_name in _DUPLICATE_WHITELIST:
+            return None
+
+        key = self._param_key(tool_name, tool_input)
+        if self._last_call_key == (tool_name, key):
+            self._last_call_count += 1
+        else:
+            self._last_call_key = (tool_name, key)
+            self._last_call_count = 1
+
+        if self._last_call_count >= 3:
+            return {
+                "block": True,
+                "msg": f"重复调用拦截: {tool_name} 已连续执行 {self._last_call_count} 次，请确认任务是否完成或调整策略",
+            }
+        elif self._last_call_count == 2:
+            return {
+                "block": False,
+                "msg": f"[系统提醒] {tool_name} 连续调用，上一步结果是否符合预期？确认后再继续",
+            }
+        return None
+
+    # ── 程序层硬约束：前置依赖检查 ───────────────────────────────
+
+    def _check_prerequisite(self, tool_name: str) -> str | None:
+        """检查前置工具是否已在当前 turn 调用过喵~
+
+        返回缺失时的提醒文本，已调用则返回 None。
+        """
+        prereq = _PREREQUISITES.get(tool_name)
+        if prereq is None:
+            return None
+        prereq_tool, reminder = prereq
+        if prereq_tool not in self._turn_tool_history:
+            return f"[前置提醒] {reminder}"
+        return None
+
+    # ── Hook 执行 ────────────────────────────────────────────────
+
+    async def _execute_hook(self, hook, tool_input: dict) -> dict:
+        """执行单个 hook: 调用 observe/locate handler，返回结果 dict 喵~"""
         handler = self.tool_handlers.get(hook.action)
         if handler is None:
             return {"success": False, "message": f"Hook action 未注册: {hook.action}"}
@@ -353,6 +402,8 @@ class AgentLoop:
             logger.warning("hook_execution_failed", hook_action=hook.action, error=str(e))
             return {"success": False, "message": f"Hook 执行失败: {e}"}
 
+    # ── 工具执行核心 ─────────────────────────────────────────────
+
     async def _execute_tool(self, event: StreamEvent) -> dict:
         import time as _time
 
@@ -368,7 +419,19 @@ class AgentLoop:
                 message=f"未知工具: {tool_name}",
             ).model_dump(mode="json")
 
-        # Guard check before execution (backward compatible: guard=None skips)
+        # ── 程序层硬约束 1: 重复调用检测 ──
+        dup_check = self._check_duplicate_call(tool_name, tool_input)
+        if dup_check and dup_check.get("block"):
+            return ToolResult(
+                success=False,
+                message=dup_check["msg"],
+                metrics={"duplicate_blocked": True, "call_count": self._last_call_count},
+            ).model_dump(mode="json")
+
+        # ── 程序层硬约束 2: 前置依赖检查 ──
+        prereq_msg = self._check_prerequisite(tool_name)
+
+        # Guard check before execution
         risk_level = self.risk_levels.get(tool_name, "L0")
         if self.guard is not None:
             gr = await self.guard.check(
@@ -384,16 +447,16 @@ class AgentLoop:
                     metrics={"decision": gr.decision},
                 ).model_dump(mode="json")
 
-        # ── Pre-hooks: 执行前自动观察喵~ ──
+        # ── Pre-hooks: 执行前自动观察，结果折叠进工具返回消息喵~ ──
+        pre_hook_results: list[str] = []
         if self._hook_registry is not None:
             for hook in self._hook_registry.get_pre_hooks(tool_name):
                 if hook.auto:
                     hook_result = await self._execute_hook(hook, tool_input)
-                    # 用 user 消息注入 hook 结果，避免违反 tool message 格式规范喵~
-                    hook_msg = (
-                        f"[{hook.action} 预检结果] {json.dumps(hook_result, ensure_ascii=False)}"
+                    obs = hook_result.get("observation", "") or json.dumps(
+                        hook_result, ensure_ascii=False
                     )
-                    self.context.add_message("user", hook_msg)
+                    pre_hook_results.append(f"[{hook.action}预检] {obs[:200]}")
 
         # Physics capture before (L1/L2 only)
         before_snapshot = None
@@ -411,15 +474,36 @@ class AgentLoop:
             rv = result.model_dump(mode="json") if isinstance(result, ToolResult) else result
             duration_ms = (_time.perf_counter() - t0) * 1000
 
-            # 注入经验提醒到工具结果中
+            # ── 注入约束信息到结果消息 ──
+            msg = (rv.get("message", "") or "") if isinstance(rv, dict) else ""
+            extras: list[str] = []
+
+            # 重复调用警告
+            if dup_check and not dup_check.get("block"):
+                extras.append(dup_check["msg"])
+
+            # 前置依赖提醒
+            if prereq_msg:
+                extras.append(prereq_msg)
+
+            # 预检结果折叠进工具返回（不在上下文中单独出现，避免污染对话）喵~
+            if pre_hook_results:
+                extras.extend(pre_hook_results)
+
+            # 经验提醒（瘦身版：最多1条，≤80字，纯文本前缀）喵~
             tips = self._get_tool_tips(tool_name)
             if tips:
-                msg = rv.get("message", "") if isinstance(rv, dict) else ""
-                tip_block = "\n💡 经验提醒:\n" + "\n".join(f"  ⚠ {t}" for t in tips)
+                tip = tips[0]
+                if len(tip) > 80:
+                    tip = tip[:77] + "..."
+                extras.append(f"[经验] {tip}")
+
+            if extras:
+                sep = "\n" if msg else ""
                 if isinstance(rv, dict):
-                    rv["message"] = msg + tip_block
+                    rv["message"] = msg + sep + "\n".join(extras)
                 else:
-                    rv = {"message": tip_block}
+                    rv = {"message": "\n".join(extras)}
 
             if self._metrics is not None:
                 self._metrics.record_latency("tool_execution", duration_ms)
@@ -427,14 +511,20 @@ class AgentLoop:
 
             logger.info("tool_execution_completed", tool_name=tool_name, duration_ms=duration_ms)
 
-            # ── Post-hooks: 执行后自动验证喵~ ──
+            # ── Post-hooks: 执行后自动验证，结果折叠进工具返回消息喵~ ──
             if self._hook_registry is not None:
                 for hook in self._hook_registry.get_post_hooks(tool_name):
                     if hook.auto:
                         hook_result = await self._execute_hook(hook, tool_input)
-                        # 用 user 消息注入 hook 结果，避免违反 tool message 格式规范喵~
-                        hook_msg = f"[{hook.action} 验证结果] {json.dumps(hook_result, ensure_ascii=False)}"
-                        self.context.add_message("user", hook_msg)
+                        obs = hook_result.get("observation", "") or json.dumps(
+                            hook_result, ensure_ascii=False
+                        )
+                        post_extra = f"[{hook.action}验证] {obs[:200]}"
+                        if isinstance(rv, dict):
+                            cur = rv.get("message", "") or ""
+                            rv["message"] = cur + "\n" + post_extra
+                        else:
+                            rv = {"message": post_extra}
 
             # Record to audit DB (with call flow context)
             if self.guard is not None:
@@ -469,6 +559,8 @@ class AgentLoop:
                 )
             return error_result
         finally:
+            # Track tool call history for prerequisite checking
+            self._turn_tool_history.append(tool_name)
             # Physics capture after (L1/L2 only)
             if before_snapshot is not None and self._physics_collector is not None:
                 speed_ratio = tool_input.get("speed_ratio", 1.0)

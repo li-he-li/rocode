@@ -1,4 +1,4 @@
-"""SDK code generation tools — escape hatch: generate, approve, sandbox, execute."""
+"""SDK 代码生成工具 — 逃生舱: 生成、审批、沙箱、执行喵~"""
 
 import inspect
 import os
@@ -12,6 +12,7 @@ from robocode.utils.models import ToolResult
 _ROBOCODE_DIR = Path(__file__).resolve().parent.parent  # robocode/
 _GENERATED_DIR = _ROBOCODE_DIR / ".temp" / "generated"
 
+# 代码中禁止的危险模式 — 正则扫描第一层防线喵~
 FORBIDDEN_PATTERNS = [
     r"import\s+socket",
     r"from\s+socket\s+import",

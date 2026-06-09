@@ -1,7 +1,6 @@
-"""Workspace-limited code inspection tools — read_file, search_code.
+"""工作空间受限的代码检查工具 — read_file + search_code 喵~
 
-Replaces generic shell cat/grep/find via execute_command for code reading.
-All operations constrained to configured workspace roots.
+替代 execute_command 中的 cat/grep/find，所有操作限制在配置的工作空间内。
 """
 
 import re
@@ -16,6 +15,7 @@ WORKSPACE_ROOTS = [
     _PROJECT_ROOT / "tests",
 ]
 
+# 二进制扩展名 — 这些文件直接拒绝读取，避免乱码喵~
 BINARY_EXTENSIONS = {
     ".bin",
     ".safetensors",
@@ -55,18 +55,17 @@ BINARY_EXTENSIONS = {
     ".DS_Store",
 }
 
-MAX_FILE_SIZE = 1_000_000  # 1 MB
+MAX_FILE_SIZE = 1_000_000  # 1 MB 上限
 
 
 def _resolve_inside_workspace(path: str) -> Path | None:
-    """Resolve path and return absolute Path if within workspace, else None."""
+    """解析路径并检查是否在工作空间内，否则返回 None 喵~"""
     p = Path(path)
     if not p.is_absolute():
         p = (_PROJECT_ROOT / p).resolve()
     else:
         p = p.resolve()
 
-    # Must be under one of the workspace roots
     for root in WORKSPACE_ROOTS:
         try:
             p.relative_to(root.resolve())
@@ -77,12 +76,12 @@ def _resolve_inside_workspace(path: str) -> Path | None:
 
 
 def _is_binary(file_path: Path) -> bool:
-    """Check if file is binary by extension."""
+    """按扩展名判断是否为二进制文件喵~"""
     return file_path.suffix.lower() in BINARY_EXTENSIONS
 
 
 def read_file(*, path: str, **kwargs) -> dict:
-    """Read a file within workspace roots. Rejects binary files and files >1MB."""
+    """在工作空间内读取文本文件 — 拒绝二进制和超大文件喵~"""
     resolved = _resolve_inside_workspace(path)
     if resolved is None:
         return ToolResult(
@@ -133,7 +132,7 @@ def read_file(*, path: str, **kwargs) -> dict:
 
 
 def search_code(*, pattern: str, path: str = "robocode/", **kwargs) -> dict:
-    """Search for pattern in files under a workspace path. Returns file:line:content."""
+    """在工作空间内用正则表达式搜索代码，返回 file:line:content 喵~"""
     root = _resolve_inside_workspace(path)
     if root is None:
         return ToolResult(
@@ -155,10 +154,7 @@ def search_code(*, pattern: str, path: str = "robocode/", **kwargs) -> dict:
     try:
         regex = re.compile(pattern)
     except re.error as e:
-        return ToolResult(
-            success=False,
-            message=f"正则表达式无效: {e}",
-        ).model_dump(mode="json")
+        return ToolResult(success=False, message=f"正则表达式无效: {e}").model_dump(mode="json")
 
     matches: list[str] = []
     files_scanned = 0
@@ -195,6 +191,7 @@ def search_code(*, pattern: str, path: str = "robocode/", **kwargs) -> dict:
 
 
 def make_code_tools() -> dict:
+    """返回 read_file + search_code handler 喵~"""
     return {
         "read_file": read_file,
         "search_code": search_code,

@@ -1,6 +1,6 @@
-"""Runtime JSONL logger — structured per-line logs for tool executions, codegen, scripts.
+"""运行时 JSONL 日志 — 结构化日志记录工具调用/代码生成/脚本执行喵~
 
-Writes to robocode/log/runtime/YYYY-MM-DD.jsonl. One JSON object per line.
+写入 robocode/log/runtime/YYYY-MM-DD.jsonl，每行一个 JSON 对象。
 """
 
 import json
@@ -10,10 +10,11 @@ from pathlib import Path
 
 _ROBOCODE_DIR = Path(__file__).resolve().parent.parent  # robocode/
 _LOG_DIR = _ROBOCODE_DIR / "log" / "runtime"
-_LOCK = threading.Lock()
+_LOCK = threading.Lock()  # 线程安全写入锁
 
 
 def _log_path() -> Path:
+    """获取当日日志文件路径，自动创建目录喵~"""
     from datetime import date
 
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -21,18 +22,14 @@ def _log_path() -> Path:
 
 
 def log_event(event_type: str, **fields):
-    """Append one structured event to today's runtime log."""
-    record = {
-        "ts": time.time(),
-        "event": event_type,
-        **fields,
-    }
+    """追加一条结构化事件到当日运行时日志喵~"""
+    record = {"ts": time.time(), "event": event_type, **fields}
     try:
         with _LOCK:
             with open(_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception:
-        pass
+        pass  # 日志写入失败不影响主流程
 
 
 def log_tool_call(
@@ -43,6 +40,7 @@ def log_tool_call(
     duration_ms: float = 0,
     session_id: str = "",
 ):
+    """记录工具调用事件喵~"""
     log_event(
         "tool_call",
         tool_name=tool_name,
@@ -62,6 +60,7 @@ def log_codegen(
     session_id: str = "",
     saved_path: str = "",
 ):
+    """记录代码生成事件喵~"""
     log_event(
         "codegen",
         summary=summary,
@@ -82,6 +81,7 @@ def log_script(
     duration_ms: float = 0,
     session_id: str = "",
 ):
+    """记录脚本执行事件喵~"""
     log_event(
         "script",
         script_name=script_name,

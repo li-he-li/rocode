@@ -1,4 +1,4 @@
-"""VLM 感知工具 handler — observe + locate 喵~"""
+"""VLM 感知工具 handler — observe(通用观察) + locate(物体定位) 喵~"""
 
 from robocode.utils.models import ToolResult
 
@@ -7,7 +7,7 @@ def make_perception_tools(perception) -> dict:
     """返回 {"observe": handler, "locate": handler} 喵~"""
 
     def observe(*, prompt: str, **kwargs) -> dict:
-        """通用视觉观察。Agent 编写 prompt 描述想观察什么喵~"""
+        """通用视觉观察 — 拍照后用 VLM 分析喵~"""
         cap = perception.capture()
         if not cap.success:
             return ToolResult(
@@ -35,7 +35,7 @@ def make_perception_tools(perception) -> dict:
         ).model_dump()
 
     def locate(*, target: str, **kwargs) -> dict:
-        """定位特定物体，返回 3D 坐标喵~"""
+        """定位特定物体 — VLM检测bbox → 深度反投影 → 3D坐标喵~"""
         cap = perception.capture()
         if not cap.success:
             return ToolResult(

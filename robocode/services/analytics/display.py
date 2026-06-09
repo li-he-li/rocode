@@ -1,4 +1,4 @@
-"""Rich Table rendering for /audit command views."""
+"""Rich 表格渲染 — /audit 命令的视图层喵~"""
 
 from rich.columns import Columns
 from rich.console import Group
@@ -7,7 +7,7 @@ from rich.panel import Panel
 
 
 def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
-    """Recent 5 sessions with aggregated stats."""
+    """渲染最近5个会话的聚合统计喵~"""
     sessions = db.recent_sessions_with_stats(limit=5)
     if not sessions:
         return Panel("暂无审计记录", title="audit")
@@ -43,6 +43,7 @@ def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
 
     lines = [table]
 
+    # 语音操作统计（如果有）
     if voice_metrics:
         vo = voice_metrics.get("voice_operations", {})
         if vo.get("total", 0) > 0:
@@ -66,8 +67,7 @@ def render_session_list(db, voice_metrics: dict | None = None) -> Panel:
 
 
 def render_tool_stats(db, session_id: str | None = None) -> Panel:
-    """Per-tool latency and success rate, with physics/annotation coverage."""
-    # Use most recent session if none specified
+    """渲染单会话的工具延迟和成功率喵~"""
     if session_id is None:
         sessions = db.list_sessions(limit=1)
         if not sessions:
@@ -99,9 +99,9 @@ def render_tool_stats(db, session_id: str | None = None) -> Panel:
             f"{lr.get('avg_ms', 0):.0f}ms",
         )
 
-    # Append physics and annotation coverage
     lines = [table]
 
+    # 物理数据采集覆盖
     pstats = db.physics_stats(session_id)
     if pstats and pstats.get("total_physics", 0) > 0:
         lines.append(
@@ -109,6 +109,7 @@ def render_tool_stats(db, session_id: str | None = None) -> Panel:
             f" | 平均延时 {pstats.get('avg_duration_ms', 0):.0f}ms[/dim]"
         )
 
+    # 标注覆盖率
     astats = db.annotation_stats(session_id)
     if astats:
         total = astats.get("total_calls", 0) or 0
@@ -120,7 +121,7 @@ def render_tool_stats(db, session_id: str | None = None) -> Panel:
 
 
 def render_safety_stats(db, session_id: str | None = None) -> Panel:
-    """Safety rejection history with reason distribution."""
+    """渲染安全拒绝统计喵~"""
     if session_id is None:
         sessions = db.list_sessions(limit=1)
         if not sessions:

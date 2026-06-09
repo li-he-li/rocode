@@ -1,7 +1,7 @@
-"""Tool authoring — wrapper template generation, metadata, registration gate.
+"""工具创作 — wrapper 模板生成、元数据、注册门控喵~
 
-Phase 2 core: agent discovers missing capability → generates SDK/ROS2-backed wrapper →
-fake backend validation → registration as permanent callable tool.
+Phase 2 核心: Agent 发现缺少能力 → 生成 SDK/ROS2 wrapper →
+Fake 后端验证 → 注册为永久可调用工具。
 """
 
 import json
@@ -13,6 +13,7 @@ from robocode.tools.registry import ToolEntry, ToolRegistry
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _REGISTRY: ToolRegistry | None = None
 
+# ── 模板 ──────────────────────────────────────────────────────────
 
 SDK_WRAPPER_TEMPLATE = '''"""Auto-generated tool: {name} — {description}"""
 from robocode.backends.base import RobotBackend
@@ -60,7 +61,7 @@ def generate_wrapper_template(
     backend: str = "sdk",
     **kwargs,
 ) -> dict:
-    """Generate a wrapper function template for SDK or ROS2 backend."""
+    """生成 SDK 或 ROS2 后端的 wrapper 函数模板喵~"""
     if not name or not name.isidentifier():
         return ToolResult(
             success=False,
@@ -133,6 +134,8 @@ def generate_wrapper_template(
     ).model_dump(mode="json")
 
 
+# ── 元数据校验 ────────────────────────────────────────────────────
+
 REQUIRED_METADATA_FIELDS = [
     "name",
     "description",
@@ -156,7 +159,7 @@ def generate_wrapper_metadata(
     dry_run: bool = False,
     **kwargs,
 ) -> dict:
-    """Generate wrapper metadata dict in Phase-1 tool registry format."""
+    """生成 wrapper 元数据字典（Phase-1 工具注册格式）喵~"""
     return {
         "name": name,
         "description": description,
@@ -169,7 +172,7 @@ def generate_wrapper_metadata(
 
 
 def validate_wrapper_metadata(metadata: dict) -> dict:
-    """Validate wrapper metadata against Phase-1 registry requirements."""
+    """验证 wrapper 元数据是否符合 Phase-1 注册要求喵~"""
     errors = []
     warnings = []
 
@@ -196,11 +199,7 @@ def validate_wrapper_metadata(metadata: dict) -> dict:
     if not metadata.get("dry_run"):
         warnings.append("建议先通过 dry-run 验证后再注册（设置 dry_run=True）")
 
-    return {
-        "valid": len(errors) == 0,
-        "errors": errors,
-        "warnings": warnings,
-    }
+    return {"valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 
 
 def register_wrapper(
@@ -215,10 +214,9 @@ def register_wrapper(
     dry_run: bool = True,
     **kwargs,
 ) -> dict:
-    """Register a wrapper as a permanent callable tool in the registry.
+    """注册 wrapper 为永久可调用工具喵~
 
-    Validates metadata, then creates and registers a ToolEntry.
-    Set dry_run=True (default) to validate without registering.
+    先验证元数据，默认 dry_run=True 仅验证不注册。
     """
     if _REGISTRY is None:
         return ToolResult(
@@ -280,6 +278,7 @@ def register_wrapper(
 
 
 def make_wrapper_tools(registry: ToolRegistry | None = None) -> dict:
+    """返回 wrapper 创作工具 handler 映射，注入全局 registry 喵~"""
     global _REGISTRY
     if registry is not None:
         _REGISTRY = registry

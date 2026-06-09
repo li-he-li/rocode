@@ -1,4 +1,4 @@
-"""Slash command dispatcher — all commands handled locally, never sent to LLM."""
+"""斜杠命令分发器 — 所有 / 命令本地处理，不经过 LLM 喵~"""
 
 import json
 from dataclasses import dataclass
@@ -8,15 +8,19 @@ from prompt_toolkit.completion import Completer, Completion
 
 @dataclass
 class SlashResult:
+    """斜杠命令返回结果喵~"""
+
     message: str = ""
     handled: bool = False
-    exit_requested: bool = False
-    estop_requested: bool = False
-    clear_screen: bool = False
-    action: str = ""
+    exit_requested: bool = False  # 是否请求退出
+    estop_requested: bool = False  # 是否请求急停
+    clear_screen: bool = False  # 是否清屏
+    action: str = ""  # 额外动作标识
 
 
 class SlashDispatcher:
+    """斜杠命令分发器 — 注册命令 → 调用 handler 喵~"""
+
     def __init__(self, db=None, registry=None, robot_backend=None):
         self._commands: dict[str, callable] = {}
         self._descriptions: dict[str, str] = {}
@@ -27,7 +31,8 @@ class SlashDispatcher:
         self._voice = None
         self._annotation_collector = None
         self._agent = None
-        # Built-in commands
+
+        # 内置命令注册
         for cmd, desc, handler in [
             ("/help", "显示帮助", self._help),
             ("/exit", "退出", self._exit),
@@ -46,7 +51,7 @@ class SlashDispatcher:
             self._descriptions[cmd] = desc
 
     def register_skill(self, skill):
-        """Register a skill as a slash command. /<name> shows info, /<name> <指令> sends skill+instruction to LLM."""
+        """将技能注册为斜杠命令 — /<name> 查看信息，/<name> <指令> 发给 LLM 喵~"""
         cmd = f"/{skill.name}"
         tag = "[需人]" if skill.requires_human else "[自动]"
         self._skills_help.append(f"  {cmd}  {tag}  {skill.description}")
@@ -54,13 +59,12 @@ class SlashDispatcher:
 
         def handler(arg, s=skill):
             if not arg.strip():
-                # No args: show skill info
+                # 无参数: 显示技能详情
                 return SlashResult(
                     handled=True,
                     message=f"## {s.name}\n\n{s.description}\n\n### 指引\n{s.body[:1500]}\n\n启动: `python {s.script}`",
                 )
-
-            # Has args: pack skill context + user instruction → forward to LLM
+            # 有参数: 打包技能上下文 + 用户指令 → 发给 LLM
             return SlashResult(
                 handled=True,
                 action="skill_prompt",
@@ -68,10 +72,8 @@ class SlashDispatcher:
                     f"【技能】{s.name}: {s.description}\n"
                     f"【人工要求】{'需要' if s.requires_human else '无需'}人工操作\n"
                     f"【启动脚本】python {s.script}\n\n"
-                    f"--- 技能指引 ---\n"
-                    f"{s.body}\n"
-                    f"--- 用户指令 ---\n"
-                    f"{arg.strip()}\n\n"
+                    f"--- 技能指引 ---\n{s.body}\n"
+                    f"--- 用户指令 ---\n{arg.strip()}\n\n"
                     f"请根据上述技能指引，执行用户的指令。如需人工操作，请引导用户逐步完成。"
                 ),
             )
@@ -79,11 +81,11 @@ class SlashDispatcher:
         self._commands[cmd] = handler
 
     def get_command_list(self) -> list[tuple[str, str]]:
-        """Return [(cmd, description), ...] for all registered commands."""
+        """返回所有已注册命令的 (cmd, description) 列表喵~"""
         return [(cmd, self._descriptions.get(cmd, "")) for cmd in self._commands]
 
     def _chat_if_args(self, cmd: str, output: str, arg: str) -> SlashResult:
-        """If arg provided，forward command output + user question to LLM."""
+        """如果有追问参数，将命令输出 + 用户问题转发给 LLM 喵~"""
         if arg.strip():
             return SlashResult(
                 handled=True,
@@ -97,6 +99,7 @@ class SlashDispatcher:
         return SlashResult(handled=True, message=output)
 
     def dispatch(self, user_input: str) -> SlashResult:
+        """分发用户输入到对应命令 handler 喵~"""
         stripped = user_input.strip()
         if not stripped.startswith("/"):
             return SlashResult()
@@ -109,6 +112,7 @@ class SlashDispatcher:
         return SlashResult()
 
     def _help(self, arg: str) -> SlashResult:
+        """显示帮助信息喵~"""
         lines = [
             "系统命令：",
             "  /help        显示帮助",
@@ -131,12 +135,14 @@ class SlashDispatcher:
         return self._chat_if_args("help", "\n".join(lines), arg)
 
     def _status(self, arg: str) -> SlashResult:
+        """查询系统状态喵~"""
         lines = ["## 系统状态\n"]
         if self._robot_backend is not None:
             try:
                 st = self._robot_backend.get_status()
                 lines.append(
-                    f"后端: {st.backend} | 连接: {'是' if st.connected else '否'} | 急停: {'是' if st.estop_active else '否'}"
+                    f"后端: {st.backend} | 连接: {'是' if st.connected else '否'}"
+                    f" | 急停: {'是' if st.estop_active else '否'}"
                 )
                 if st.motor_angles:
                     lines.append(f"关节: {[round(a, 1) for a in st.motor_angles]}")
@@ -149,6 +155,7 @@ class SlashDispatcher:
         return self._chat_if_args("status", "\n".join(lines), arg)
 
     def _tools(self, arg: str) -> SlashResult:
+        """列出所有工具按风险级别分组喵~"""
         if self._registry is None:
             return SlashResult(handled=True, message="工具注册表未初始化")
 
@@ -167,6 +174,7 @@ class SlashDispatcher:
         return self._chat_if_args("tools", "\n".join(lines), arg)
 
     def _audit(self, arg: str) -> SlashResult:
+        """查看审计日志 — 支持 sessions/tools/safety 子命令喵~"""
         if self._db is None:
             return SlashResult(handled=True, message="审计日志: 数据库未初始化")
         try:
@@ -178,7 +186,6 @@ class SlashDispatcher:
 
             sub = arg.strip().lower()
             voice_m = self._voice.get_metrics() if self._voice else None
-
             if sub == "tools":
                 panel = render_tool_stats(self._db)
             elif sub == "safety":
@@ -190,7 +197,6 @@ class SlashDispatcher:
                     handled=True,
                     message=f"未知 /audit 子命令: {sub}。可用: sessions, tools, safety",
                 )
-
             return SlashResult(handled=True, message=str(panel))
         except Exception as e:
             return SlashResult(handled=True, message=f"审计日志查询失败: {e}")
@@ -199,17 +205,15 @@ class SlashDispatcher:
         return SlashResult(handled=True, clear_screen=True, message="上下文已清空")
 
     def _resume(self, arg: str) -> SlashResult:
+        """恢复会话 — 无参数列出历史会话，有参数恢复指定会话喵~"""
         if self._db is None:
             return SlashResult(handled=True, message="数据库未初始化，无法恢复会话")
-
         arg = arg.strip()
         if not arg:
-            # No session ID — list recent sessions for interactive selection
             try:
                 sessions = self._db.recent_sessions_with_stats(limit=10)
                 if not sessions:
                     return SlashResult(handled=True, message="没有历史会话")
-                # Return list + action for app.py to handle interactive selection
                 session_list = []
                 for s in sessions:
                     total = s.get("total_calls", 0)
@@ -232,7 +236,6 @@ class SlashDispatcher:
             except Exception as e:
                 return SlashResult(handled=True, message=f"查询会话失败: {e}")
 
-        # Specific session ID — restore context
         try:
             session = self._db.get_session(arg)
             if session is None:
@@ -241,13 +244,12 @@ class SlashDispatcher:
                 if not matches:
                     return SlashResult(handled=True, message=f"会话 {arg[:12]}... 不存在")
                 session = matches[0]
-
             return self._build_resume_result(session)
         except Exception as e:
             return SlashResult(handled=True, message=f"恢复会话失败: {e}")
 
     def _build_resume_result(self, session: dict) -> SlashResult:
-        """Build SlashResult for resuming a specific session."""
+        """构建会话恢复的 SlashResult 喵~"""
         checkpoint = self._db.get_latest_checkpoint(session["id"])
         if checkpoint is None:
             return SlashResult(
@@ -287,7 +289,7 @@ class SlashDispatcher:
         return SlashResult(
             handled=True,
             action="approve_all",
-            message="本会话所有 L2 工具已免审批。可通过 /approve-all 再次切换。",
+            message="本会话所有 L2 工具已免审批",
         )
 
     def _done(self, _arg: str) -> SlashResult:
@@ -297,7 +299,7 @@ class SlashDispatcher:
         return SlashResult(handled=True, action="exp_manage", message="")
 
     def _exit(self, arg: str) -> SlashResult:
-        # Check for unannotated items
+        """退出 — 先检查是否有未标注项喵~"""
         if self._annotation_collector is not None:
             unannotated = self._annotation_collector.count_unannotated()
             if unannotated > 0:
@@ -310,7 +312,7 @@ class SlashDispatcher:
 
 
 class SlashCompleter(Completer):
-    """Tab-completion for / commands with dropdown preview."""
+    """Tab 补全 / 命令 — 带下拉预览喵~"""
 
     def __init__(self, dispatcher: SlashDispatcher):
         self._dispatcher = dispatcher

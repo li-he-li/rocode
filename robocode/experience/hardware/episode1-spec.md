@@ -1,9 +1,11 @@
 ---
 type: reference
 tags: [hardware, joint-limits, kinematics, workspace]
-confidence: 0.5
+confidence: 0.48
 description: "关节限位/零位/连杆长度/工作空间/正方向定义/因果链（已注入system prompt作为硬件手册）"
+updated: 2026-05-27
 ---
+
 # Episode 1 六轴机械臂硬件描述
 
 > 来源: episode1_urdf_1113.urdf + safety.py + settings.py + sdk_demo.py

@@ -1,4 +1,4 @@
-"""Physics data collector — captures joint angles before/after L1/L2 tool execution."""
+"""物理数据采集器 — L1/L2 工具执行前后捕获关节角度喵~"""
 
 import time
 from robocode.services.analytics.logger import get_logger
@@ -7,10 +7,9 @@ logger = get_logger("physics_collector")
 
 
 class PhysicsCollector:
-    """Captures joint angle snapshots before and after tool execution.
+    """在工具执行前后捕获关节角度快照，写入 DB 供经验分析喵~
 
-    Only calls get_motor_angles() — end_pose is derived via FK when needed,
-    not stored redundantly.
+    只调用 get_motor_angles() — 末端位姿通过 FK 按需推导，不冗余存储。
     """
 
     def __init__(self, backend, db, session_id: str = "", metrics=None):
@@ -19,13 +18,12 @@ class PhysicsCollector:
         self._session_id = session_id
         self._metrics = metrics
 
-    # ── public API ────────────────────────────────────────────────────
+    # ── 公共 API ──────────────────────────────────────────────────
 
     def capture_before(self, tool_name: str) -> dict:
-        """Capture joint angles before tool execution.
+        """执行前捕获关节角度快照喵~
 
-        Returns a snapshot dict with joint_angles and tool_name.
-        On SDK failure, logs error and returns snapshot with None angles.
+        SDK 失败时记录错误，返回 angles=None 的快照。
         """
         snapshot = {"tool_name": tool_name, "joint_angles": None}
         try:
@@ -51,12 +49,12 @@ class PhysicsCollector:
         duration_ms: float = 0,
         speed_ratio: float = 1.0,
     ) -> dict:
-        """Capture joint angles after tool execution and write physics data to DB.
+        """执行后捕获关节角度并将物理数据写入 DB 喵~
 
-        Returns the after-snapshot. Skips DB write if tool_call_id is None.
+        tool_call_id 为 None 时跳过 DB 写入。
         """
         t0 = time.perf_counter()
-        after_snapshot = self.capture_before(tool_name)
+        after_snapshot = self.capture_before(tool_name)  # 复用 capture_before 逻辑
 
         if tool_call_id is not None and self._db and self._session_id:
             try:
@@ -69,7 +67,7 @@ class PhysicsCollector:
                     duration_ms=duration_ms,
                     speed_ratio=speed_ratio,
                 )
-                # Mark physics_captured on the tool_call row
+                # 标记 tool_calls 行的 physics_captured 字段
                 self._db.conn.execute(
                     "UPDATE tool_calls SET physics_captured=1 WHERE id=?",
                     (tool_call_id,),
@@ -93,7 +91,7 @@ class PhysicsCollector:
         return after_snapshot
 
     def get_physics_summary(self, before: dict, after: dict) -> dict | None:
-        """Compute joint delta and aggregate summary from before/after snapshots."""
+        """计算关节变化量摘要喵~"""
         before_angles = before.get("joint_angles")
         after_angles = after.get("joint_angles")
         if before_angles is None or after_angles is None:
